@@ -20,6 +20,20 @@ const MAIN_FIRST_CHECKPOINT_MIN_TOOL_ROUNDS = 4;
 const USER_WAIT_TOOLS: Record<string, true> = { ask: true };
 /** Tool that hands work to subagents; a main run calling it delegates. */
 const DELEGATION_TOOL = "task";
+/** omp's step-list tool (`todo_write` in older sessions). */
+const TODO_TOOLS: Record<string, true> = { todo: true, todo_write: true };
+/** Step statuses that close a step. */
+const CLOSED_TODO_STATUSES: Record<string, true> = { completed: true, abandoned: true };
+
+/** Whether a `todo` result's step list (`details.phases`) has steps left; `undefined` when it carries none. */
+function hasOpenSteps(result: unknown): boolean | undefined {
+	const details = (result as { details?: { phases?: unknown } } | undefined)?.details;
+	if (!Array.isArray(details?.phases)) return undefined;
+	return details.phases.some(
+		(phase: { tasks?: { status?: string }[] }) =>
+			Array.isArray(phase?.tasks) && phase.tasks.some(task => !CLOSED_TODO_STATUSES[task?.status ?? ""]),
+	);
+}
 
 /** Capabilities the scope checkpoint borrows from its owning session. */
 export interface ScopeCheckpointHost {
@@ -41,6 +55,13 @@ export interface ScopeCheckpointHost {
  * gets no checkpoint: its time is spent waiting on subagents, and each
  * subagent session runs its own timer on the subagent minutes setting.
  *
+ * Plan mode gets none either: neither while the agent drafts the plan nor while
+ * it carries out an approved one ({@link startPlanRun}). The execution lasts
+ * across follow-up requests while its step list has open steps; a request that
+ * starts once every step is closed — or, for a plan run without a step list,
+ * once a run that worked on it (an answer that was not aborted) has ended — is
+ * a new task.
+ *
  * {@link requestWrapUp} queues a one-shot wrap-up reminder delivered at the
  * next tool-round boundary, bypassing the time and round gates.
  */
@@ -56,13 +77,26 @@ export class ScopeCheckpoint {
 	#lastAssistantStopReason: string | undefined;
 	#delegated = false;
 	#wrapUpPending = false;
+	/** An approved plan is being carried out. */
+	#planRunning = false;
+	/** Whether the plan run's latest step list has open steps; `undefined` until one is written. */
+	#planStepsOpen: boolean | undefined;
+	/** The model answered (not aborted) since the approval: the run is working on the plan. */
+	#planWorked = false;
+	/** A run that worked on the plan ended. */
+	#planRunEnded = false;
 
 	constructor(host: ScopeCheckpointHost) {
 		this.#host = host;
 	}
 
-	/** Resets per-request time, round, checkpoint, delegation, and wrap-up state. */
+	/**
+	 * Resets per-request time, round, checkpoint, delegation, and wrap-up state at
+	 * the start of a request, which also ends a finished plan run.
+	 */
 	resetCycle(): void {
+		const planDone = this.#planStepsOpen === false || (this.#planStepsOpen === undefined && this.#planRunEnded);
+		if (this.#planRunning && planDone) this.endPlanRun();
 		this.#activeMs = 0;
 		this.#runStartedAt = undefined;
 		this.#userWaitStartedAt = undefined;
@@ -73,6 +107,22 @@ export class ScopeCheckpoint {
 		this.#lastAssistantStopReason = undefined;
 		this.#delegated = false;
 		this.#wrapUpPending = false;
+	}
+
+	/** The user approved a plan: carrying it out gets no checkpoint until it is done. */
+	startPlanRun(): void {
+		this.#planRunning = true;
+		this.#planStepsOpen = undefined;
+		this.#planWorked = false;
+		this.#planRunEnded = false;
+	}
+
+	/** Drops the plan run (the session changed). */
+	endPlanRun(): void {
+		this.#planRunning = false;
+		this.#planStepsOpen = undefined;
+		this.#planWorked = false;
+		this.#planRunEnded = false;
 	}
 
 	/** Synchronous event bookkeeping; MUST run before any await in the session event handler. */
@@ -86,6 +136,7 @@ export class ScopeCheckpoint {
 					this.#activeMs += Date.now() - this.#runStartedAt;
 					this.#runStartedAt = undefined;
 				}
+				if (this.#planWorked) this.#planRunEnded = true;
 				return;
 			case "tool_execution_start":
 				if (event.toolName === DELEGATION_TOOL) this.#delegated = true;
@@ -96,11 +147,15 @@ export class ScopeCheckpoint {
 					this.#userWaitMs += Date.now() - this.#userWaitStartedAt;
 					this.#userWaitStartedAt = undefined;
 				}
+				if (this.#planRunning && TODO_TOOLS[event.toolName] && !event.isError) {
+					this.#planStepsOpen = hasOpenSteps(event.result) ?? this.#planStepsOpen;
+				}
 				return;
 			case "message_end":
 				if (event.message.role !== "assistant") return;
 				this.#lastAssistantStopReason = event.message.stopReason;
 				if (event.message.stopReason === "toolUse") this.#toolRounds++;
+				if (this.#planRunning && event.message.stopReason !== "aborted") this.#planWorked = true;
 				return;
 		}
 	}
@@ -131,7 +186,7 @@ export class ScopeCheckpoint {
 		}
 		const settings = this.#host.settings;
 		if (!cfgModelScopeCheckpointEnabled.get(settings)) return null;
-		if (this.#host.planModeEnabled()) return null;
+		if (this.#host.planModeEnabled() || this.#planRunning) return null;
 		if (kind === "main" && (this.#delegated || this.#host.delegateModeEnabled())) return null;
 		const minutes =
 			kind === "sub"

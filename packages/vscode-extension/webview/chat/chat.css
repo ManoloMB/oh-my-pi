@@ -2,8 +2,8 @@
  * Chat webview, styled after the Codex VS Code extension. Neutral surfaces come
  * from VS Code theme variables; the MarIA Code logo (`maria-mark.png`,
  * `maria-logo.png`, copied next to this file by the build) marks the header and
- * the empty state, and the accent (TUI `accent`) marks the working spinner, the
- * send button, skill chips, and picker checks.
+ * the empty state, and the accent (Unicaja green, in every theme) marks the
+ * working spinner, the send button, skill chips, and picker checks.
  */
 
 /* Tokens live on `body` so they resolve after VS Code's theme variables (set on `html`) and theme classes (on `body`). */
@@ -33,7 +33,7 @@ body {
 	--r-3xl: 20px;
 	--gutter: 16px;
 	--thread-max: none;
-	--omp-accent: #febc38;
+	--omp-accent: #2bd125;
 	--omp-accent-fg: #1a1a1a;
 	--menu-bg: var(--vscode-editorWidget-background, var(--c-bg));
 	--menu-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
@@ -53,8 +53,6 @@ body {
 
 body.vscode-light,
 body.vscode-high-contrast-light {
-	--omp-accent: #5a8080;
-	--omp-accent-fg: #ffffff;
 	--c-add: #1a7f37;
 	--c-del: #cf222e;
 	--c-error: #cf222e;
@@ -808,7 +806,7 @@ code {
 /*
  * Timeline: each step of a turn (thinking, tool row, answer) hangs from a dot
  * on a vertical rail, like Claude Code. Green: the tool succeeded; red: it
- * failed; accent, pulsing: still running; grey: thinking, text, stopped.
+ * failed; grey, pulsing: still running or thinking; grey: text, stopped.
  * transcript.ts marks steps and sets `--step-gap` (the space to the next step)
  * on those joined to the next one (`.step-link`).
  */
@@ -859,7 +857,7 @@ code {
 
 .step.activity:is([data-status="pending"], [data-status="running"]),
 .step.thinking.live {
-	--dot: var(--omp-accent);
+	--dot: var(--c-fg-3);
 }
 
 .step.activity:is([data-status="pending"], [data-status="running"])::before,

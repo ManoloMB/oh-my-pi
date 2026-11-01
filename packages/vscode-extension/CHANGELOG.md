@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.0]
+
+### Changed
+
+- The accent (send button, thinking, plan and subagent buttons, spinners, skill chips, picker checks) is now Unicaja green `#2bd125` in every theme, instead of yellow (teal in light themes)
+- The empty chat shows the green MarIA Code logo with the Unicaja symbol
+- A command still running, and the thinking step while the model thinks, show their step dot blinking grey instead of green; a command's dot turns green when it finishes successfully
+
+### Fixed
+
+- Approving a plan with "Approve and execute" now keeps the plan button lit and tracking the execution: the extension read the approval from the wrong place in omp's `xd://propose` result, so the button switched off as plan mode ended
+
 ## [0.22.0]
 
 ### Added

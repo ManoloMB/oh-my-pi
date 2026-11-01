@@ -1,11 +1,12 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AsideMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentEvent, type AsideMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { ScopeCheckpoint } from "@oh-my-pi/pi-coding-agent/session/scope-checkpoint";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -273,5 +274,109 @@ describe("AgentSession scope checkpoint", () => {
 	it("refuses a wrap-up when no request is running", () => {
 		setup();
 		expect(session!.requestWrapUp()).toBe(false);
+	});
+});
+
+/**
+ * Plan mode gets no scope checkpoint: neither while the agent drafts the plan nor
+ * while it carries out an approved one, across follow-ups until its steps close.
+ */
+describe("ScopeCheckpoint in plan mode", () => {
+	let clock = 0;
+
+	function checkpoint(planMode = false): ScopeCheckpoint {
+		clock = 1_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => clock);
+		return new ScopeCheckpoint({
+			settings: Settings.isolated({}),
+			agentKind: () => "main",
+			planModeEnabled: () => planMode,
+			delegateModeEnabled: () => false,
+		});
+	}
+
+	const event = (value: unknown) => value as AgentEvent;
+	const answer = (scope: ScopeCheckpoint, stopReason: "toolUse" | "stop" | "aborted") =>
+		scope.onAgentEvent(event({ type: "message_end", message: { role: "assistant", content: [], stopReason } }));
+	const request = (scope: ScopeCheckpoint) => {
+		scope.resetCycle();
+		scope.onAgentEvent(event({ type: "agent_start" }));
+	};
+	const runEnd = (scope: ScopeCheckpoint) => scope.onAgentEvent(event({ type: "agent_end", messages: [] }));
+	const steps = (scope: ScopeCheckpoint, statuses: string[]) =>
+		scope.onAgentEvent(
+			event({
+				type: "tool_execution_end",
+				toolCallId: "todo_1",
+				toolName: "todo",
+				result: {
+					content: [],
+					details: { phases: [{ name: "Build", tasks: statuses.map(status => ({ content: "step", status })) }] },
+				},
+			}),
+		);
+	/** Long enough and with enough tool rounds for a checkpoint outside plan mode. */
+	const longWork = (scope: ScopeCheckpoint) => {
+		for (let i = 0; i < 10; i++) answer(scope, "toolUse");
+		clock += 20 * MINUTE;
+	};
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("gives none while the agent drafts the plan", () => {
+		const scope = checkpoint(true);
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).toBeNull();
+	});
+
+	it("gives none while an approved plan runs, through follow-ups with open steps, until a request after its steps close", () => {
+		const scope = checkpoint();
+		request(scope);
+		// RPC: the approval lands mid-request and the same run carries the plan out.
+		scope.startPlanRun();
+		longWork(scope);
+		steps(scope, ["completed", "in_progress"]);
+		expect(scope.take()).toBeNull();
+		runEnd(scope);
+
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).toBeNull();
+		steps(scope, ["completed", "abandoned"]);
+		runEnd(scope);
+
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).not.toBeNull();
+	});
+
+	it("ends a plan run without steps after a run that worked on it, not at the turn the approval interrupted", () => {
+		const scope = checkpoint();
+		request(scope);
+		scope.startPlanRun();
+		// Interactive: the planning turn is aborted at approval, then a new request executes the plan.
+		answer(scope, "aborted");
+		runEnd(scope);
+
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).toBeNull();
+		runEnd(scope);
+
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).not.toBeNull();
+	});
+
+	it("drops the plan run when the session changes", () => {
+		const scope = checkpoint();
+		scope.startPlanRun();
+		scope.endPlanRun();
+		request(scope);
+		longWork(scope);
+		expect(scope.take()).not.toBeNull();
 	});
 });

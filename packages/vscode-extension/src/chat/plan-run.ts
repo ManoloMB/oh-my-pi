@@ -1,7 +1,8 @@
 /**
  * The approved plan the shown session is executing, folded from its transcript
  * so it survives reloads and session switches without a store of its own:
- * omp's `xd://propose` result marks the approval (`details.approved`, with the
+ * omp's `xd://propose` result marks the approval (the write's `details.xdev`
+ * envelope carries the plan handler's `inner` details: `approved`, with the
  * plan's title), and every `todo` result carries the whole step list. A user
  * prompt sent once every step is closed starts a new task and ends the run.
  */
@@ -45,8 +46,11 @@ export class PlanRunTracker {
 	apply(message: AgentMessage): boolean {
 		if (message.role === "toolResult") {
 			const details = record(message.details);
-			if (message.toolName === "write" && details?.approved === true && typeof details.title === "string") {
-				this.#run = { id: message.toolCallId, title: details.title, phases: undefined };
+			// A device write wraps the device's own details: `{ xdev: { tool, inner } }`.
+			const xdev = record(details?.xdev);
+			const approval = xdev?.tool === "propose" ? record(xdev.inner) : undefined;
+			if (message.toolName === "write" && approval?.approved === true && typeof approval.title === "string") {
+				this.#run = { id: message.toolCallId, title: approval.title, phases: undefined };
 				return true;
 			}
 			if (this.#run && TODO_TOOLS[message.toolName] && Array.isArray(details?.phases)) {

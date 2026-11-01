@@ -6872,8 +6872,10 @@ export class AgentSession implements SettingsScope {
 		this.#planReferenceSent = true;
 	}
 
+	/** Points the next turns at the approved plan; every approval sets it, so its execution starts here. */
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
+		this.#scopeCheckpoint.startPlanRun();
 	}
 
 	getPlanReferencePath(): string {
@@ -9982,6 +9984,7 @@ export class AgentSession implements SettingsScope {
 
 			this.#todo.resetCycle();
 			this.#scopeCheckpoint.resetCycle();
+			this.#scopeCheckpoint.endPlanRun();
 			this.#planReferenceSent = false;
 			this.#planReferencePath = "local://PLAN.md";
 			this.#advisors.resetSessionState();
@@ -11645,6 +11648,7 @@ export class AgentSession implements SettingsScope {
 			this.#todo.syncFromBranch();
 			this.#modelMentions.syncFromBranch();
 			if (switchingToDifferentSession) {
+				this.#scopeCheckpoint.endPlanRun();
 				this.#closeAllProviderSessions("session switch");
 			} else if (didReloadConversationChange) {
 				this.#closeAllProviderSessions("session reload");

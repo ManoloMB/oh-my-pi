@@ -14,8 +14,16 @@ function toolResult(toolCallId: string, toolName: string, details: unknown): Age
 	} as AgentMessage;
 }
 
+/** The `write xd://propose` result as omp records it: the plan handler's details inside the device envelope. */
 const approval = (id: string, approved = true) =>
-	toolResult(id, "write", { planFilePath: "local://auth-plan.md", title: "auth", planExists: true, approved });
+	toolResult(id, "write", {
+		xdev: {
+			tool: "propose",
+			mode: "execute",
+			args: { title: "auth" },
+			inner: { planFilePath: "local://auth-plan.md", title: "auth", planExists: true, approved },
+		},
+	});
 
 const todo = (statuses: string[]): AgentMessage =>
 	toolResult("t", "todo", {
