@@ -8,7 +8,9 @@
 import type {
 	AvailableSlashCommand,
 	ChatRequest,
+	ChatUpdate,
 	ImageContent,
+	PlanRunView,
 	SessionState,
 	SessionStats,
 	SubagentView,
@@ -23,6 +25,7 @@ import { DictationControl, type DictationState } from "./dictation";
 import { GhostText } from "./ghost-text";
 import { openLightbox } from "./lightbox";
 import { ModelPicker } from "./model-picker";
+import { PlanRunPanel } from "./plan-run-panel";
 import type { PromptRecall } from "./transcript";
 import { SubagentPanel } from "./subagent-panel";
 
@@ -95,6 +98,7 @@ export class Composer {
 	#thinkingToggle: HTMLButtonElement;
 	#thinkingExpanded = false;
 	#planToggle: HTMLButtonElement;
+	#planRun: PlanRunPanel;
 	#planCommand: LocalCommand;
 	#planAvailable = false;
 	#planOn = false;
@@ -153,8 +157,12 @@ export class Composer {
 		});
 		this.#thinkingToggle.classList.add("thinking-toggle");
 		this.#renderThinkingToggle();
-		this.#planToggle = iconButton("plan", "", () => this.#setPlanMode(!this.#planOn));
+		this.#planToggle = iconButton("plan", "", () => {
+			if (this.#planRun.active && !this.#planOn) this.#planRun.toggle();
+			else this.#setPlanMode(!this.#planOn);
+		});
 		this.#planToggle.classList.add("plan-toggle");
+		this.#planRun = new PlanRunPanel(this.#planToggle, post, () => this.#setPlanMode(true));
 		this.#planCommand = {
 			name: "plan",
 			description: "Toggle plan mode (agent plans before executing)",
@@ -199,7 +207,7 @@ export class Composer {
 						{ className: "composer-footer-left" },
 						iconButton("plus", "Attach files", () => this.post({ type: "attachFiles" })),
 						this.#thinkingToggle,
-						this.#planToggle,
+						this.#planRun.element,
 						this.#subagentPanel.element,
 						this.picker.element,
 					),
@@ -260,6 +268,17 @@ export class Composer {
 		this.#subagentPanel.setSubagents(subagents);
 	}
 
+	/** Requests of the subagent whose popup is open. */
+	setSubagentRequests(update: Extract<ChatUpdate, { type: "subagentRequests" }>): void {
+		this.#subagentPanel.setSubagentRequests(update);
+	}
+
+	/** The approved plan being executed: the plan button tracks it until it is cleared. */
+	setPlanRun(run: PlanRunView | null): void {
+		this.#planRun.setRun(run);
+		this.#renderPlanToggle();
+	}
+
 	/** omp's commands plus the local ones it does not offer itself. */
 	#mergeCommands(): void {
 		const commands = this.#offered;
@@ -291,12 +310,19 @@ export class Composer {
 	}
 
 	#renderPlanToggle(): void {
-		this.#planToggle.hidden = !this.#planAvailable;
-		const title = this.#planOn ? "Leave plan mode" : "Plan mode: plan read-only before changing code";
+		const tracking = this.#planRun.active && !this.#planOn;
+		this.#planToggle.hidden = !this.#planAvailable && !tracking;
+		const title = this.#planOn
+			? "Leave plan mode"
+			: tracking
+				? this.#planRun.title
+				: "Plan mode: plan read-only before changing code";
 		setTooltip(this.#planToggle, title);
 		this.#planToggle.ariaLabel = title;
 		this.#input.placeholder = this.#placeholder();
-		this.#planToggle.ariaPressed = String(this.#planOn);
+		this.#planToggle.ariaPressed = String(this.#planOn || tracking);
+		this.#planToggle.ariaHasPopup = tracking ? "dialog" : null;
+		this.#planToggle.classList.toggle("executing", tracking);
 	}
 
 	#setDelegateMode(enabled: boolean): void {

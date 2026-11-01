@@ -10,6 +10,8 @@ export interface PlanApprovalDetails {
 	planFilePath: string;
 	title: string;
 	planExists: boolean;
+	/** Set on the `xd://propose` result of an approved plan (RPC); hosts track the execution from it. */
+	approved?: boolean;
 }
 
 /** Validate and normalize the agent-supplied plan title into a safe filename stem.

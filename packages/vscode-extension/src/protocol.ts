@@ -19,6 +19,7 @@ import type {
 	SessionState,
 	SessionStats,
 	ThinkingLevel,
+	TodoPhase,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 
 export type {
@@ -35,8 +36,9 @@ export type {
 	ThinkingContent,
 	ThinkingLevel,
 	ToolCall,
+	TodoItem,
+	TodoPhase,
 	ToolResultMessage,
-	UserMessage,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 
 /** A model the user can pick (trimmed from omp's catalog entry). */
@@ -99,6 +101,20 @@ export function isUserPrompt(message: AgentMessage): boolean {
 	return message.role === "custom" && message.customType === "skill-prompt" && message.attribution === "user";
 }
 
+/**
+ * An approved plan being executed, tracked by the plan button. `starting`: no
+ * step list yet; `running`: the agent works through open steps; `paused`: the
+ * agent stopped with steps still open; `done`: every step is closed.
+ */
+export interface PlanRunView {
+	title: string;
+	/** Local path of the plan file, when it can be opened. */
+	planFile?: string;
+	status: "starting" | "running" | "paused" | "done";
+	/** The agent's step list (`todo`) since the approval; empty until it makes one. */
+	phases: TodoPhase[];
+}
+
 /** Lifecycle status of a subagent row. */
 export type SubagentStatus = "pending" | "running" | "completed" | "failed" | "aborted";
 
@@ -124,13 +140,39 @@ export interface SubagentView {
 	durationMs: number;
 	/** When the host first saw the agent (epoch ms); running rows tick from it. */
 	startedAt: number;
-	/** The agent's latest self-estimate of completion (0–100). */
-	completionPercent?: number;
 	model?: string;
 	/** Provider retry in progress or the final retry failure, as a short line. */
 	retry?: string;
 	/** The user asked it to wrap up (`hurrySubagents`). */
 	wrapUpRequested: boolean;
+}
+
+/** A tool call of a subagent request: `running` until its result arrives, `interrupted` when the agent ended first. */
+export interface SubagentToolView {
+	name: string;
+	/** The call's intent, else its first text argument (path, command, pattern…). */
+	label?: string;
+	status: "running" | "done" | "error" | "interrupted";
+}
+
+/** One model request of a subagent (an assistant message of its transcript), oldest first. */
+export interface SubagentRequestView {
+	/** 1-based, as omp counts the subagent's requests. */
+	index: number;
+	/** When the model's answer was recorded (epoch ms). */
+	at: number;
+	/** How long the model took to answer (ms). */
+	durationMs?: number;
+	/** Input + output + cache-write tokens, as the panel's token total counts them. */
+	tokens: number;
+	cost: number;
+	/** First line of the answer's text. */
+	text?: string;
+	tools: SubagentToolView[];
+	/** The provider error or abort that ended the answer. */
+	error?: string;
+	/** Its tool calls are still running: the request the agent is processing. */
+	current: boolean;
 }
 
 /** What a session is doing in this window: working, or finished while no chat showed it. */
@@ -237,6 +279,8 @@ export type ChatUpdate =
 	 * as buttons and answer with `planDecision`. `path` is the plan file on disk.
 	 */
 	| { type: "planReview"; id: string; title: string; content: string; path?: string; options: string[] }
+	/** The approved plan being executed, or null when none (cleared by a new plan, a new task, or `dismissPlanRun`). */
+	| { type: "planRun"; run: PlanRunView | null }
 	/** omp withdrew the plan review (the turn was aborted); disable its buttons. */
 	| { type: "planReviewClosed"; id: string }
 	/** omp is reviewing the skills the last task of the open session relied on (`running`), or not (`idle`). */
@@ -244,7 +288,13 @@ export type ChatUpdate =
 	/** Pending skill proposals of the shown session, newest first. */
 	| { type: "skillProposals"; proposals: SkillProposalSummary[] }
 	/** Subagents of the shown session's current task (running first, then finished); empty when none. */
-	| { type: "subagents"; subagents: SubagentView[] };
+	| { type: "subagents"; subagents: SubagentView[] }
+	/**
+	 * Requests of the watched subagent (`watchSubagent`), re-sent as its transcript grows.
+	 * `waiting`: it is running with no tool in flight, so the model is answering its next request.
+	 * `error`: its transcript could not be read (e.g. a session that is not saved to disk).
+	 */
+	| { type: "subagentRequests"; id: string; requests: SubagentRequestView[]; waiting: boolean; error?: string };
 
 /** Chat webview → host. */
 export type ChatRequest =
@@ -278,8 +328,12 @@ export type ChatRequest =
 	| { type: "setDelegateMode"; enabled: boolean }
 	/** Ask every running subagent (and the lead) to wrap up. */
 	| { type: "hurrySubagents" }
+	/** Follow one subagent's requests (`subagentRequests`), or stop with `null`. */
+	| { type: "watchSubagent"; id: string | null }
 	/** Answer a `planReview` with one of its options. */
 	| { type: "planDecision"; id: string; value: string }
+	/** Stop tracking the approved plan's execution (the plan button turns off). */
+	| { type: "dismissPlanRun" }
 	/** Open a plan file (absolute path) rendered in an editor tab. */
 	| { type: "openPlan"; path: string }
 	/** Revert one of omp's self-improvement edits to a skill (`omp skill revert <id>`), from its `skill-update` card. */

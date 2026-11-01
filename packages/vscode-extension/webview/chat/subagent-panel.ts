@@ -1,59 +1,37 @@
 /**
  * Delegate mode button with its subagent panel. Without subagents to show the
  * button toggles delegate mode; once the current task has subagents it opens a
- * popover listing each one (status, task, current step, progress, estimated
- * time left, usage), the delegate mode switch, and "Hurry up", which asks every
- * running agent to wrap up.
+ * popover listing each one (status, task, current step, run time, usage), the
+ * delegate mode switch, and "Hurry up", which asks every running agent to wrap
+ * up. Clicking a subagent opens the popup with its requests.
  */
-import type { ChatRequest, SubagentView } from "../../src/protocol";
+import type { ChatRequest, ChatUpdate, SubagentView } from "../../src/protocol";
 import { h } from "../dom";
 import { icon } from "../icons";
 import { setTooltip } from "../tooltip";
 import { formatCost, formatTokens } from "./context-meter";
+import { elapsedMs, formatDuration, isActive, STATUS_LABELS } from "./subagent-format";
+import { SubagentRequestsDialog } from "./subagent-requests";
 
 type Post = (request: ChatRequest) => void;
-
-const STATUS_LABELS: Record<SubagentView["status"], string> = {
-	pending: "Queued",
-	running: "Running",
-	completed: "Done",
-	failed: "Failed",
-	aborted: "Stopped",
-};
-
-function isActive(row: SubagentView): boolean {
-	return row.status === "pending" || row.status === "running";
-}
-
-function formatDuration(ms: number): string {
-	const seconds = Math.max(0, Math.round(ms / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
-	return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
-}
-
-/** Run time: live for running rows, omp's reported time once finished. */
-function elapsedMs(row: SubagentView, now: number): number {
-	return isActive(row) ? Math.max(row.durationMs, now - row.startedAt) : row.durationMs || now - row.startedAt;
-}
-
-/** Time left extrapolated from the agent's completion self-estimate. */
-function remainingMs(row: SubagentView, elapsed: number): number | undefined {
-	const percent = row.completionPercent;
-	if (!isActive(row) || percent === undefined || percent <= 0 || percent >= 100) return undefined;
-	return (elapsed * (100 - percent)) / percent;
-}
 
 export class SubagentPanel {
 	readonly element: HTMLElement;
 	#trigger: HTMLButtonElement;
 	#badge = h("span", { className: "subagent-badge", hidden: true });
 	#popover = h("div", { className: "subagent-popover", role: "dialog", ariaLabel: "Subagents", hidden: true });
+	#summary = h("span", { className: "subagent-summary" });
+	#modeLabel = h("span");
+	#modeButton = h("button", { type: "button", className: "subagent-mode-button" });
+	#list = h("div", { className: "subagent-list" });
+	#hurry = h("button", { type: "button", className: "subagent-hurry" }, icon("zap"), h("span", null, "Hurry up"));
 	#rows: SubagentView[] = [];
 	#available = false;
 	#modeOn = false;
 	#ticker: number | undefined;
+	#requests: SubagentRequestsDialog;
+	/** Card under the last pointer press: cards are rebuilt every second, so a click may end on a new node. */
+	#pressedId: string | undefined;
 
 	constructor(
 		private readonly post: Post,
@@ -69,6 +47,40 @@ export class SubagentPanel {
 			if (this.#rows.length > 0) this.#popover.hidden ? this.#open() : this.#close();
 			else this.onToggleMode();
 		});
+		this.#modeButton.addEventListener("click", () => this.onToggleMode());
+		this.#requests = new SubagentRequestsDialog(post);
+		this.#list.addEventListener("pointerdown", event => {
+			this.#pressedId = event.button === 0 ? this.#cardId(event.target) : undefined;
+		});
+		this.#list.addEventListener("pointerup", event => {
+			const id = this.#cardId(event.target);
+			if (id !== undefined && id === this.#pressedId) this.#openRequests(id);
+			this.#pressedId = undefined;
+		});
+		this.#list.addEventListener("keydown", event => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			const id = this.#cardId(event.target);
+			if (id === undefined) return;
+			event.preventDefault();
+			this.#openRequests(id);
+		});
+		this.#hurry.addEventListener("click", () => {
+			this.#hurry.disabled = true;
+			this.post({ type: "hurrySubagents" });
+		});
+		// Built once: the ticker re-renders every second, and rebuilding the list would reset its scroll
+		// and swallow clicks on buttons replaced between mousedown and mouseup.
+		this.#popover.append(
+			h(
+				"div",
+				{ className: "subagent-header" },
+				h("span", { className: "subagent-title" }, "Subagents"),
+				this.#summary,
+			),
+			h("div", { className: "subagent-mode" }, this.#modeLabel, this.#modeButton),
+			this.#list,
+			h("div", { className: "subagent-actions" }, this.#hurry),
+		);
 		this.element = h("div", { className: "subagent-panel" }, this.#trigger, this.#popover);
 		this.element.addEventListener("keydown", event => {
 			if (event.key === "Escape" && !this.#popover.hidden) {
@@ -79,7 +91,9 @@ export class SubagentPanel {
 			}
 		});
 		document.addEventListener("mousedown", event => {
-			if (!this.#popover.hidden && !this.element.contains(event.target as Node)) this.#close();
+			const target = event.target as Node;
+			if (!this.#popover.hidden && !this.element.contains(target) && !this.#requests.element.contains(target))
+				this.#close();
 		});
 		this.#renderTrigger();
 	}
@@ -97,6 +111,21 @@ export class SubagentPanel {
 		if (rows.length === 0) this.#close();
 		this.#renderTrigger();
 		if (!this.#popover.hidden) this.#render();
+		this.#requests.setSubagents(rows);
+	}
+
+	/** Requests of the subagent whose popup is open. */
+	setSubagentRequests(update: Extract<ChatUpdate, { type: "subagentRequests" }>): void {
+		this.#requests.setRequests(update);
+	}
+
+	#cardId(target: EventTarget | null): string | undefined {
+		return (target as Element | null)?.closest<HTMLElement>(".subagent-card")?.dataset.id;
+	}
+
+	#openRequests(id: string): void {
+		const row = this.#rows.find(candidate => candidate.id === id);
+		if (row) this.#requests.open(row);
 	}
 
 	#renderTrigger(): void {
@@ -135,60 +164,40 @@ export class SubagentPanel {
 		const now = Date.now();
 		const active = this.#rows.filter(isActive);
 		const finished = this.#rows.length - active.length;
-		const summary = [active.length > 0 && `${active.length} running`, finished > 0 && `${finished} finished`]
+		this.#summary.textContent = [
+			active.length > 0 && `${active.length} running`,
+			finished > 0 && `${finished} finished`,
+		]
 			.filter(Boolean)
 			.join(" · ");
 
-		const modeButton = h(
-			"button",
-			{ type: "button", className: "subagent-mode-button", disabled: !this.#available },
-			this.#modeOn ? "Turn off" : "Turn on",
-		);
-		modeButton.addEventListener("click", () => this.onToggleMode());
-		const mode = h(
-			"div",
-			{ className: "subagent-mode" },
-			h("span", null, `Delegate mode: ${this.#modeOn ? "on" : "off"}`),
-			modeButton,
-		);
+		this.#modeLabel.textContent = `Delegate mode: ${this.#modeOn ? "on" : "off"}`;
+		this.#modeButton.textContent = this.#modeOn ? "Turn off" : "Turn on";
+		this.#modeButton.disabled = !this.#available;
 
-		const hurry = h(
-			"button",
-			{ type: "button", className: "subagent-hurry" },
-			icon("zap"),
-			h("span", null, "Hurry up"),
-		);
 		const pendingWrapUp = active.filter(row => !row.wrapUpRequested).length;
-		hurry.disabled = pendingWrapUp === 0;
+		this.#hurry.disabled = pendingWrapUp === 0;
 		setTooltip(
-			hurry,
+			this.#hurry,
 			active.length === 0
 				? "No subagent is running."
 				: pendingWrapUp === 0
 					? "Every running agent was already asked to wrap up."
 					: "Ask every running agent to wrap up: finish the step in progress, skip optional work, and report what is done. MarIA Code integrates instead of starting new work.",
 		);
-		hurry.addEventListener("click", () => {
-			hurry.disabled = true;
-			this.post({ type: "hurrySubagents" });
-		});
 
-		this.#popover.replaceChildren(
-			h(
-				"div",
-				{ className: "subagent-header" },
-				h("span", { className: "subagent-title" }, "Subagents"),
-				h("span", { className: "subagent-summary" }, summary),
-			),
-			mode,
-			h("div", { className: "subagent-list" }, ...this.#rows.map(row => this.#card(row, now))),
-			h("div", { className: "subagent-actions" }, hurry),
-		);
+		const list = this.#list;
+		const scrollTop = list.scrollTop;
+		const focusedId = list.contains(document.activeElement) ? this.#cardId(document.activeElement) : undefined;
+		list.replaceChildren(...this.#rows.map(row => this.#card(row, now)));
+		list.scrollTop = scrollTop;
+		if (focusedId !== undefined) {
+			[...list.querySelectorAll<HTMLElement>(".subagent-card")].find(card => card.dataset.id === focusedId)?.focus();
+		}
 	}
 
 	#card(row: SubagentView, now: number): HTMLElement {
 		const elapsed = elapsedMs(row, now);
-		const remaining = remainingMs(row, elapsed);
 		const task = row.description ?? row.assignment?.split("\n").find(line => line.trim()) ?? "";
 
 		const header = h(
@@ -210,27 +219,6 @@ export class SubagentPanel {
 		if (row.activity) lines.push(h("div", { className: "subagent-activity" }, row.activity));
 		if (row.retry) lines.push(h("div", { className: "subagent-retry" }, row.retry));
 
-		// Progress: the agent's completion self-estimate, else the share of its request budget used.
-		const percent =
-			row.completionPercent ??
-			(row.requestBudget ? Math.min(100, (row.requests / row.requestBudget) * 100) : undefined);
-		if (percent !== undefined && isActive(row)) {
-			const bar = h("div", { className: "subagent-bar" }, h("div", { className: "subagent-bar-fill" }));
-			(bar.firstElementChild as HTMLElement).style.width = `${Math.round(percent)}%`;
-			const label =
-				row.completionPercent !== undefined
-					? `~${Math.round(row.completionPercent)}% done${remaining !== undefined ? ` · ~${formatDuration(remaining)} left` : ""}`
-					: `${row.requests} of ${row.requestBudget} requests used`;
-			const progress = h("div", { className: "subagent-progress" }, bar, h("span", null, label));
-			setTooltip(
-				progress,
-				row.completionPercent !== undefined
-					? "The agent's own estimate of how complete its task is; time left is extrapolated from it."
-					: "No completion estimate yet: requests used out of the soft budget the agent is held to.",
-			);
-			lines.push(progress);
-		}
-
 		const stats = [
 			`${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`,
 			row.requestBudget ? `${row.requests}/${row.requestBudget} req` : `${row.requests} req`,
@@ -245,6 +233,12 @@ export class SubagentPanel {
 		if (!isActive(row)) {
 			lines.push(h("div", { className: `subagent-final ${row.status}` }, STATUS_LABELS[row.status]));
 		}
-		return h("div", { className: `subagent-card ${row.status}` }, ...lines);
+		const card = h(
+			"div",
+			{ className: `subagent-card ${row.status}`, role: "button", tabIndex: 0, dataset: { id: row.id } },
+			...lines,
+		);
+		setTooltip(card, "See its requests");
+		return card;
 	}
 }

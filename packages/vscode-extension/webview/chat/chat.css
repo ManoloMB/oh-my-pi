@@ -2771,6 +2771,16 @@ code {
 	border: 1px solid var(--c-border);
 	border-radius: var(--r-lg, 8px);
 	background: var(--c-surface);
+	cursor: pointer;
+}
+
+.subagent-card:hover {
+	border-color: var(--c-border-heavy);
+}
+
+.subagent-card:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
 }
 
 .subagent-card:not(.running):not(.pending) {
@@ -2790,12 +2800,14 @@ code {
 	animation: subagent-pulse 1.4s ease-in-out infinite;
 }
 
-.subagent-dot.completed {
+.subagent-dot.completed,
+.subagent-dot.done {
 	background: var(--c-add);
 }
 
 .subagent-dot.failed,
-.subagent-dot.aborted {
+.subagent-dot.aborted,
+.subagent-dot.error {
 	background: var(--c-error);
 }
 
@@ -2862,31 +2874,291 @@ code {
 	color: var(--omp-accent);
 }
 
-.subagent-progress {
+/* Requests of one subagent (webview/chat/subagent-requests.ts), opened from its card. */
+
+.subagent-requests-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 150;
 	display: flex;
 	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	background: rgb(0 0 0 / 0.45);
+}
+
+.subagent-requests {
+	display: flex;
+	flex-direction: column;
 	gap: 8px;
+	width: min(560px, 100%);
+	max-height: 100%;
+	padding: 12px;
+	border-radius: var(--r-xl);
+	border: 1px solid var(--c-border-heavy);
+	background: var(--menu-bg);
+	box-shadow: var(--menu-shadow);
+	font-size: var(--fs-sm);
+}
+
+.subagent-requests-header,
+.subagent-request-header,
+.subagent-tool {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.subagent-requests-name {
+	font-size: var(--fs);
+	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.subagent-requests-meta {
+	flex: 1;
+	min-width: 0;
+	color: var(--c-fg-2);
+	font-variant-numeric: tabular-nums;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.subagent-requests-task {
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.subagent-requests-list {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	overflow-y: auto;
+}
+
+.subagent-requests-empty,
+.subagent-requests-footer {
+	color: var(--c-fg-3);
+}
+
+.subagent-request {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 8px 10px;
+	border: 1px solid var(--c-border);
+	border-radius: var(--r-lg, 8px);
+	background: var(--c-surface);
+}
+
+.subagent-request.current {
+	border-color: var(--omp-accent);
+}
+
+.subagent-request-index {
+	flex: none;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+}
+
+.subagent-request-stats {
+	flex: 1;
+	min-width: 0;
+	color: var(--c-fg-3);
+	font-variant-numeric: tabular-nums;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.subagent-request-badge {
+	flex: none;
+	padding: 0 6px;
+	border-radius: 9999px;
+	background: var(--omp-accent);
+	color: var(--c-bg);
+	font-size: 11px;
+}
+
+.subagent-request-text {
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	color: var(--c-fg-2);
+}
+
+.subagent-request-error {
+	color: var(--c-error);
+}
+
+.subagent-request-tools {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.subagent-tool-name {
+	flex: none;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--fs-code);
+}
+
+.subagent-tool-label {
+	min-width: 0;
+	color: var(--c-fg-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.subagent-tool.interrupted {
+	opacity: 0.6;
+}
+
+.subagent-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+
+/* Progress of an approved plan, behind the plan button (webview/chat/plan-run-panel.ts). */
+
+.plan-run-badge {
+	right: -5px;
+}
+
+.plan-run-title {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs);
+	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.plan-run-status {
+	flex: none;
+	padding: 0 6px;
+	border-radius: 9999px;
+	background: var(--c-border-heavy);
+	color: var(--c-fg-2);
+	font-size: 11px;
+}
+
+.plan-run-status.running,
+.plan-run-status.starting {
+	background: var(--omp-accent);
+	color: var(--c-bg);
+}
+
+.plan-run-status.done {
+	color: var(--c-add);
+}
+
+.plan-run-summary {
 	color: var(--c-fg-2);
 	font-variant-numeric: tabular-nums;
 }
 
-.subagent-bar {
-	flex: 1;
+.plan-run-bar {
 	height: 4px;
 	border-radius: 9999px;
 	background: var(--c-border-heavy);
 	overflow: hidden;
 }
 
-.subagent-bar-fill {
+.plan-run-bar-fill {
 	height: 100%;
 	border-radius: inherit;
 	background: var(--omp-accent);
 }
 
-.subagent-actions {
+.plan-run-list {
 	display: flex;
-	justify-content: flex-end;
+	flex-direction: column;
+	gap: 10px;
+	max-height: min(50vh, 380px);
+	overflow-y: auto;
+}
+
+.plan-run-phase {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.plan-run-phase-name {
+	display: flex;
+	justify-content: space-between;
+	gap: 6px;
+	font-weight: 500;
+}
+
+.plan-run-phase-count {
+	color: var(--c-fg-3);
+	font-weight: normal;
+	font-variant-numeric: tabular-nums;
+}
+
+.plan-run-task {
+	display: flex;
+	gap: 6px;
+	padding: 2px 6px;
+	border-radius: var(--r-md, 6px);
+	color: var(--c-fg-2);
+}
+
+.plan-run-task.in_progress {
+	background: var(--c-surface);
+	color: var(--c-fg);
+	box-shadow: inset 2px 0 0 var(--omp-accent);
+}
+
+.plan-run-task.abandoned {
+	text-decoration: line-through;
+	opacity: 0.6;
+}
+
+.plan-run-glyph {
+	flex: none;
+	width: 1em;
+	text-align: center;
+}
+
+.plan-run-task.completed .plan-run-glyph {
+	color: var(--c-add);
+}
+
+.plan-run-task.in_progress .plan-run-glyph {
+	color: var(--omp-accent);
+	animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.plan-run-task.blocked .plan-run-glyph,
+.plan-run-blocker {
+	color: var(--c-error);
+}
+
+.plan-run-task-body {
+	min-width: 0;
+}
+
+.plan-run-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.plan-run-spacer {
+	flex: 1;
 }
 
 /* Plan review card */

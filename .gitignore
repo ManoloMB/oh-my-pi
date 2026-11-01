@@ -94,3 +94,11 @@ packages/coding-agent/bench/boot-baseline.json
 /.bazelrc.user
 
 .parity/
+
+# Local prompt drafts and curator samples
+/common-system-prompt.md
+/system-prompt.md
+/system-prompt-fixes.md
+/new-fixes.md
+/curator-input.txt
+/curator-output.txt

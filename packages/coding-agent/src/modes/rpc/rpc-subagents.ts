@@ -4,7 +4,6 @@ import { type AgentRef, AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries } from "../../session/session-loader";
-import { setSubagentProgressObserved } from "../../task/completion-probe";
 import { type AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import {
 	type SubagentEventPayload,
@@ -136,7 +135,6 @@ export class RpcSubagentRegistry {
 		for (const unsubscribe of this.#unsubscribers) unsubscribe();
 		this.#unsubscribers = [];
 		this.#observabilityBus = undefined;
-		setSubagentProgressObserved(false);
 		this.#subagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
 		this.#staleSubagentIds.clear();
@@ -164,7 +162,6 @@ export class RpcSubagentRegistry {
 			this.#eventUnsubscribe = undefined;
 		}
 		this.#subscriptionLevel = level;
-		setSubagentProgressObserved(level !== "off");
 	}
 
 	getSubscriptionLevel(): RpcSubagentSubscriptionLevel {

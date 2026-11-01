@@ -497,6 +497,9 @@ export class ChatSession implements vscode.Disposable, HostView {
 			case "hurrySubagents":
 				await this.#requireHost().hurrySubagents();
 				return;
+			case "watchSubagent":
+				this.#host?.watchSubagent(request.id);
+				return;
 			case "openSettings":
 				this.commands.openSettings();
 				return;
@@ -522,6 +525,9 @@ export class ChatSession implements vscode.Disposable, HostView {
 				return;
 			case "planDecision":
 				this.#host?.decidePlan(request.id, request.value);
+				return;
+			case "dismissPlanRun":
+				this.#host?.dismissPlanRun();
 				return;
 			case "openPlan":
 				// Rendered, as Claude Code and Codex show plans; the preview links to the source.

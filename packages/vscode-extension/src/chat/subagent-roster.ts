@@ -112,7 +112,6 @@ export class SubagentRoster {
 		row.tokens = num(progress.tokens) ?? row.tokens;
 		row.cost = num(progress.cost) ?? row.cost;
 		row.durationMs = num(progress.durationMs) ?? row.durationMs;
-		row.completionPercent = num(progress.completionPercent) ?? row.completionPercent;
 		row.model = str(progress.resolvedModelIdentity) ?? str(progress.resolvedModel) ?? row.model;
 		row.retry = retryLine(progress);
 	}

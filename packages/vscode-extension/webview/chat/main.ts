@@ -199,8 +199,14 @@ function handle(update: ChatUpdate): void {
 		case "planReviewClosed":
 			transcript.closePlanReview(update.id);
 			break;
+		case "planRun":
+			composer.setPlanRun(update.run);
+			break;
 		case "subagents":
 			composer.setSubagents(update.subagents);
+			break;
+		case "subagentRequests":
+			composer.setSubagentRequests(update);
 			break;
 		case "commands":
 			composer.setCommands(update.commands);

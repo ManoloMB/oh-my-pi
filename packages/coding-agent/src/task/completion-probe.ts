@@ -25,25 +25,14 @@ import { cfgTaskCompletionProbe } from "./settings";
  */
 const PROBE_DELAYS_MS = [2, 5, 10, 30, 60].map(minutes => minutes * 60_000);
 
-/** A protocol host subscribed to subagent progress renders it like the interactive Agent Hub does. */
-let subagentProgressObserved = false;
-
-/** Declare whether a protocol host (RPC) currently renders subagent progress, so its subagents get probes too. */
-export function setSubagentProgressObserved(observed: boolean): void {
-	subagentProgressObserved = observed;
-}
-
 /**
  * Whether a subagent spawned by a session at `parentDepth` gets completion probes.
- * Only hosts that show the estimate pay for it — the interactive TUI, or a protocol
- * host subscribed to subagent progress — and only the main agent's direct subagents
- * (`parentDepth` 0) are probed.
+ * Only the interactive TUI shows the estimate, so print/RPC/ACP/SDK hosts never pay
+ * for it, and only the main agent's direct subagents (`parentDepth` 0) are probed.
  * Callers: the task executor and eval workpool, when building a run monitor.
  */
 export function isCompletionProbeEnabled(settings: Settings, parentDepth: number): boolean {
-	return (
-		parentDepth === 0 && (isInteractiveHost() || subagentProgressObserved) && cfgTaskCompletionProbe.get(settings)
-	);
+	return parentDepth === 0 && isInteractiveHost() && cfgTaskCompletionProbe.get(settings);
 }
 
 /** Inputs for {@link startCompletionProbe}. */

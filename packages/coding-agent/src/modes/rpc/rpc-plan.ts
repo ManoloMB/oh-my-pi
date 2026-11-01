@@ -13,10 +13,11 @@
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ExtensionUIContext } from "../../extensibility/extensions/types";
 import { normalizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { autosaveApprovedPlan } from "../../plan-mode/plan-autosave";
+import planApprovedResultPrompt from "../../prompts/system/plan-approved-result.md" with { type: "text" };
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../../plan-mode/plan-files";
 import { cfgPlanEnabled } from "../../plan-mode/settings";
 import type { AgentSession } from "../../session/agent-session";
@@ -216,10 +217,14 @@ export class RpcPlanController {
 			content: [
 				{
 					type: "text",
-					text: `Plan approved at ${planFilePath}. Plan mode exited; proceed with the implementation.${autosaveFailed ? " (Plan autosave failed; continuing.)" : ""}`,
+					text: prompt.render(planApprovedResultPrompt, {
+						planFilePath,
+						autosaveFailed,
+						todo: session.getEnabledToolNames().includes("todo"),
+					}),
 				},
 			],
-			details,
+			details: { ...details, approved: true },
 		};
 	}
 

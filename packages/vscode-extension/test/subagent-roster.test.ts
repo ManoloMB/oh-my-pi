@@ -14,13 +14,12 @@ describe("SubagentRoster", () => {
 	it("folds progress into a row, then keeps a finished row's terminal status against late progress", () => {
 		const roster = new SubagentRoster();
 		roster.applyLifecycle({ id: "Parser", agent: "task", agentSource: "bundled", status: "started", index: 0 });
-		roster.applyProgress(progress("Parser", { currentToolIntent: "Reading parser.ts", completionPercent: 40 }));
+		roster.applyProgress(progress("Parser", { currentToolIntent: "Reading parser.ts" }));
 		expect(roster.list()[0]).toMatchObject({
 			status: "running",
 			activity: "Reading parser.ts",
 			requests: 4,
 			requestBudget: 40,
-			completionPercent: 40,
 			assignment: "Refactor the parser\nKeep the API",
 		});
 

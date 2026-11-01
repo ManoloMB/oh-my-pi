@@ -33,10 +33,15 @@ import { ompCommand, readConfig, workspaceCwd, workspaceRoots } from "../config"
 import { ensureNoWorkspaceFolder, rememberNoWorkspaceSession } from "../no-workspace";
 import { lastSystemCa } from "../system-ca";
 import { DialogBridge } from "../dialogs";
-import { type AgentStatus, type ChatUpdate, isUserPrompt, type ModelChoice } from "../protocol";
+import { type AgentStatus, type ChatUpdate, isUserPrompt, type ModelChoice, type PlanRunView } from "../protocol";
 import { OmpCommandError, OmpProcess, type OmpResult } from "../rpc/omp-process";
+import { PlanRunTracker } from "./plan-run";
 import { userPrompt } from "./prompt-entries";
+import { SubagentRequestLog } from "./subagent-requests";
 import { SubagentRoster } from "./subagent-roster";
+
+/** How often a followed subagent's transcript is re-read while it runs. */
+const WATCH_POLL_MS = 2000;
 
 /** Notification frames that are not session events (everything else is forwarded as `event`). */
 const NON_EVENT_FRAMES: Record<string, true> = {
@@ -164,6 +169,10 @@ export class AgentHost implements vscode.Disposable {
 	/** Subagents of the shown session's current task, for the chat's subagent panel. */
 	readonly #subagents = new SubagentRoster();
 	#subagentsTimer: NodeJS.Timeout | undefined;
+	/** The subagent whose requests a view's popup follows, with the transcript read so far. */
+	#watched: { id: string; log: SubagentRequestLog; reading: boolean; stale: boolean } | undefined;
+	/** Re-reads the watched transcript between progress frames (a long tool call sends none). */
+	#watchTimer: NodeJS.Timeout | undefined;
 	/** The turn being checkpointed: snapshots taken (in the background) as its prompt was sent. */
 	#turn: TurnCheckpoint | undefined;
 	/** Checkpoint snapshots and writes, in order; awaited before anything reads them. */
@@ -175,6 +184,16 @@ export class AgentHost implements vscode.Disposable {
 	readonly #planReviews = new Map<string, { update: PlanReview; resolve(value: string | undefined): void }>();
 	/** Whether omp is reviewing the open session's skills, re-sent to views that attach later. */
 	#curation: SkillCuration = CURATION_IDLE;
+	/** The approved plan being executed, folded from the transcript, for the plan button. */
+	readonly #planRun = new PlanRunTracker();
+	/** Local plan files by approving tool call: known only for plans approved in this window. */
+	readonly #planFiles = new Map<string, string>();
+	/** Plan file of the review answered last; the approval result that follows takes it. */
+	#reviewedPlanFile: string | undefined;
+	/** The plan run as last posted (JSON), so unchanged refreshes post nothing. */
+	#postedPlanRun = "null";
+	/** The run the user stopped tracking; a view attaching rebuilds from the transcript and must not revive it. */
+	#dismissedPlanRun: string | undefined;
 	readonly #onDidChange = new vscode.EventEmitter<AgentHost>();
 	/** Fires when the process, session, title, model, busy or settled state changes. */
 	readonly onDidChange = this.#onDidChange.event;
@@ -253,6 +272,7 @@ export class AgentHost implements vscode.Disposable {
 		this.#views.delete(view);
 		// Speech meant for a view that moved on must not land in another one.
 		if (this.#views.size === 0 && this.#dictating) void this.dictationCancel();
+		if (this.#views.size === 0) this.watchSubagent(null);
 	}
 
 	/** Bring `view` up to date: status, transcript and pickers, pending plan reviews. */
@@ -317,7 +337,7 @@ export class AgentHost implements vscode.Disposable {
 			return;
 		}
 		await process.request("set_ask_dialog", { enabled: true }).catch(error => this.log.appendLine(String(error)));
-		// Progress frames feed the subagent panel (and make omp probe subagents for completion estimates).
+		// Progress frames feed the subagent panel.
 		await process
 			.request("set_subagent_subscription", { level: "progress" })
 			.catch(error => this.log.appendLine(String(error)));
@@ -487,10 +507,19 @@ export class AgentHost implements vscode.Disposable {
 	async setPlanMode(enabled: boolean): Promise<void> {
 		try {
 			await this.#requireProcess().request("set_plan_mode", { enabled });
+			// A new plan replaces the one being tracked.
+			if (enabled) this.#planRun.clear();
 		} finally {
 			// Also on failure: the webview toggled its button optimistically.
 			await this.#refreshState();
 		}
+	}
+
+	/** Stop tracking the executing plan: the plan button turns off until the next approval. */
+	dismissPlanRun(): void {
+		this.#dismissedPlanRun = this.#planRun.id;
+		this.#planRun.clear();
+		this.#postPlanRun();
 	}
 
 	async setDelegateMode(enabled: boolean): Promise<void> {
@@ -515,6 +544,16 @@ export class AgentHost implements vscode.Disposable {
 			"info",
 			`Asked ${notified} ${notified === 1 ? "subagent" : "subagents"} to wrap up; each gets the request at its next step.`,
 		);
+	}
+
+	/** Follow `id`'s requests in the views (`subagentRequests`), or stop following with `null`. */
+	watchSubagent(id: string | null): void {
+		clearInterval(this.#watchTimer);
+		this.#watchTimer = undefined;
+		this.#watched = id === null ? undefined : { id, log: new SubagentRequestLog(), reading: false, stale: false };
+		if (id === null) return;
+		this.#watchTimer = setInterval(() => void this.#readWatched(), WATCH_POLL_MS);
+		void this.#readWatched();
 	}
 
 	async availableModels(): Promise<ModelChoice[]> {
@@ -582,7 +621,26 @@ export class AgentHost implements vscode.Disposable {
 	decidePlan(id: string, value: string): void {
 		const review = this.#planReviews.get(id);
 		this.#planReviews.delete(id);
+		this.#reviewedPlanFile = review?.update.path;
 		review?.resolve(value);
+	}
+
+	/** The executing plan for the views; hidden while plan mode is on (the button is busy planning). */
+	#planRunView(): PlanRunView | null {
+		if (this.#state?.planMode?.enabled) return null;
+		const run = this.#planRun.view(this.#busy);
+		const id = this.#planRun.id;
+		const planFile = id === undefined ? undefined : this.#planFiles.get(id);
+		return run && { ...run, ...(planFile ? { planFile } : {}) };
+	}
+
+	/** Post the executing plan when it changed since the last post. */
+	#postPlanRun(): void {
+		const run = this.#planRunView();
+		const json = JSON.stringify(run);
+		if (json === this.#postedPlanRun) return;
+		this.#postedPlanRun = json;
+		this.post({ type: "planRun", run });
 	}
 
 	post(update: ChatUpdate): void {
@@ -592,6 +650,7 @@ export class AgentHost implements vscode.Disposable {
 	dispose(): void {
 		clearTimeout(this.#refreshTimer);
 		clearTimeout(this.#subagentsTimer);
+		clearInterval(this.#watchTimer);
 		void this.#stopProcess();
 		this.#dialogs.dispose();
 		this.#onDidChange.dispose();
@@ -953,6 +1012,18 @@ export class AgentHost implements vscode.Disposable {
 			const last = frame.messages.findLast(message => message.role === "assistant");
 			if (last?.stopReason === "aborted" || last?.stopReason === "error") this.#soundSuppressed = true;
 		}
+		if (frame.type === "message_end") {
+			const runBefore = this.#planRun.id;
+			this.#planRun.apply(frame.message);
+			const run = this.#planRun.id;
+			if (run !== undefined && run !== runBefore && this.#reviewedPlanFile) {
+				this.#planFiles.set(run, this.#reviewedPlanFile);
+				this.#reviewedPlanFile = undefined;
+			}
+		}
+		if (frame.type === "message_end" || frame.type === "agent_start" || frame.type === "agent_end") {
+			this.#postPlanRun();
+		}
 		// Approving a plan (a `write` to `xd://propose`) leaves plan mode mid-turn.
 		const planDecision = frame.type === "tool_execution_end" && frame.toolName === "write";
 		if (STATE_CHANGING_EVENTS[frame.type] || (planDecision && this.#state?.planMode)) this.#scheduleRefresh();
@@ -974,10 +1045,61 @@ export class AgentHost implements vscode.Disposable {
 		clearTimeout(this.#subagentsTimer);
 		this.#subagentsTimer = undefined;
 		this.post({ type: "subagents", subagents: this.#subagents.list() });
+		void this.#readWatched();
 	}
 
 	#resetSubagents(): void {
+		this.watchSubagent(null);
 		if (this.#subagents.clear()) this.#postSubagents();
+	}
+
+	/**
+	 * Read the watched subagent's new transcript lines and post its requests. One
+	 * read at a time: a call while reading marks the result stale, and the reader
+	 * goes again before posting.
+	 */
+	async #readWatched(): Promise<void> {
+		const watched = this.#watched;
+		const process = this.process;
+		if (!watched || !process) return;
+		if (watched.reading) {
+			watched.stale = true;
+			return;
+		}
+		watched.reading = true;
+		try {
+			do {
+				watched.stale = false;
+				const transcript = await process.request("get_subagent_messages", {
+					subagentId: watched.id,
+					fromByte: watched.log.nextByte,
+				});
+				if (this.#watched !== watched) return;
+				if (transcript.reset) watched.log.reset();
+				watched.log.append(transcript.messages);
+				watched.log.nextByte = transcript.nextByte;
+			} while (watched.stale);
+			const row = this.#subagents.list().find(subagent => subagent.id === watched.id);
+			const active = row?.status === "pending" || row?.status === "running";
+			this.post({ type: "subagentRequests", id: watched.id, ...watched.log.view(active) });
+			if (!active) {
+				clearInterval(this.#watchTimer);
+				this.#watchTimer = undefined;
+			}
+		} catch (error) {
+			if (this.#watched !== watched) return;
+			this.post({
+				type: "subagentRequests",
+				id: watched.id,
+				requests: [],
+				waiting: false,
+				error: errorMessage(error),
+			});
+			clearInterval(this.#watchTimer);
+			this.#watchTimer = undefined;
+		} finally {
+			watched.reading = false;
+		}
 	}
 
 	async #refreshState(): Promise<void> {
@@ -1003,6 +1125,7 @@ export class AgentHost implements vscode.Disposable {
 			noWorkspace: this.noWorkspace,
 		});
 		this.#onDidChange.fire(this);
+		this.#postPlanRun();
 	}
 
 	async #sendThinkingLevels(views: Iterable<HostView>): Promise<void> {
@@ -1025,6 +1148,11 @@ export class AgentHost implements vscode.Disposable {
 			sessionFile && this.commandOutputs ? await this.commandOutputs.load(sessionFile).catch(() => []) : [];
 		if (this.#process !== process) return;
 		send({ type: "history", messages, commandOutputs });
+		this.#planRun.load(messages);
+		if (this.#planRun.id !== undefined && this.#planRun.id === this.#dismissedPlanRun) this.#planRun.clear();
+		const run = this.#planRunView();
+		this.#postedPlanRun = JSON.stringify(run);
+		this.post({ type: "planRun", run });
 		const [commands] = await Promise.all([
 			process.request("get_available_commands").catch(() => undefined),
 			this.#sendThinkingLevels(targets).catch(error => this.log.appendLine(String(error))),

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.22.0]
+
+### Added
+
+- Clicking a subagent in the subagent panel opens a popup with its requests: when each was answered, how long it took, tokens, cost, the first line of the answer and its tool calls (running, done, failed), with the request in progress highlighted and a row while the model is answering the next one
+- After you approve a plan with "Approve and execute", the plan button stays lit with a done/total badge while omp implements it; clicking it shows the agent's steps by phase with the one in progress highlighted, plus Open plan, Stop tracking and New plan. Tracking ends at your next prompt once every step is closed, and is rebuilt from the session when you reopen it
+
+### Changed
+
+- The subagent panel no longer shows a completion estimate, time left or progress bar, and omp no longer asks subagents how far along they are: each card shows run time, requests, tools, tokens and cost
+
+### Fixed
+
+- The subagent panel keeps its scroll position with several subagents instead of jumping back to the top every second, and its Turn on/off and Hurry up buttons no longer miss clicks
+
 ## [0.21.0]
 
 ### Added
