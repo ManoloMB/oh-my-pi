@@ -208,6 +208,9 @@ function handle(update: ChatUpdate): void {
 		case "subagentRequests":
 			composer.setSubagentRequests(update);
 			break;
+		case "scopeCheckpoint":
+			composer.setScopeCheckpointStats(update.stats);
+			break;
 		case "commands":
 			composer.setCommands(update.commands);
 			break;

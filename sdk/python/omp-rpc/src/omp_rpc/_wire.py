@@ -135,6 +135,12 @@ _SLOW_MODE_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"session", "global"}
 _decode_slow_mode_scope = cast("Decoder[SlowModeScope]", literal(_SLOW_MODE_SCOPE_VALUES))
 
 
+ScopeCheckpointLevel: TypeAlias = Literal["light", "severe", "hard"]
+"""User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has."""
+_SCOPE_CHECKPOINT_LEVEL_VALUES: Final[frozenset[str]] = frozenset({"light", "severe", "hard"})
+_decode_scope_checkpoint_level = cast("Decoder[ScopeCheckpointLevel]", literal(_SCOPE_CHECKPOINT_LEVEL_VALUES))
+
+
 BtwStatus: TypeAlias = Literal["running", "complete", "cancelled", "error", "interrupted"]
 """Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran."""
 _BTW_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "complete", "cancelled", "error", "interrupted"})
@@ -920,6 +926,19 @@ class SubagentMessages:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ScopeCheckpointStats:
+    """Work done on the current request."""
+    running: bool
+    """A request is running and can receive a checkpoint."""
+    active_ms: int
+    """Active time since the latest request started, excluding time between runs and time blocked on `ask`."""
+    tool_rounds: int
+    """Model turns that called tools since the latest request started."""
+    tool_calls: int
+    """Tool calls the model made since the latest request started; one turn may make several."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class BtwHistoryTurn:
     """One question and its answer within a side-question topic."""
     question: str
@@ -1648,6 +1667,12 @@ class SetPlanModeResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ScopeCheckpointResult:
+    queued: bool
+    subagents: int
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class DictationStopResult:
     text: str
     submit: bool
@@ -2289,6 +2314,16 @@ def parse_subagent_messages(value: object, path: str = "SubagentMessages") -> Su
         reset=required(payload, "reset", decode_bool, path),
         entries=required(payload, "entries", array(decode_json_object), path),
         messages=required(payload, "messages", array(parse_agent_message), path),
+    )
+
+
+def parse_scope_checkpoint_stats(value: object, path: str = "ScopeCheckpointStats") -> ScopeCheckpointStats:
+    payload = expect_object(value, path)
+    return ScopeCheckpointStats(
+        running=required(payload, "running", decode_bool, path),
+        active_ms=required(payload, "activeMs", decode_int, path),
+        tool_rounds=required(payload, "toolRounds", decode_int, path),
+        tool_calls=required(payload, "toolCalls", decode_int, path),
     )
 
 
@@ -3123,6 +3158,14 @@ def parse_set_plan_mode_result(value: object, path: str = "SetPlanModeResult") -
     )
 
 
+def parse_scope_checkpoint_result(value: object, path: str = "ScopeCheckpointResult") -> ScopeCheckpointResult:
+    payload = expect_object(value, path)
+    return ScopeCheckpointResult(
+        queued=required(payload, "queued", decode_bool, path),
+        subagents=required(payload, "subagents", decode_int, path),
+    )
+
+
 def parse_dictation_stop_result(value: object, path: str = "DictationStopResult") -> DictationStopResult:
     payload = expect_object(value, path)
     return DictationStopResult(
@@ -3427,6 +3470,17 @@ class WireClient:
         """Ask every running subagent to wrap up through a hidden reminder at its next tool round; the main agent gets a lead variant when any was reached. Returns how many subagents were reached."""
         params: dict[str, object] = {}
         return required(expect_object(self._command("hurry_subagents", params), "hurry_subagents"), "notified", decode_int, "hurry_subagents")
+
+    def get_scope_checkpoint(self) -> ScopeCheckpointStats:
+        """Active time and tool rounds of the current request, for deciding whether to send a scope checkpoint."""
+        params: dict[str, object] = {}
+        return parse_scope_checkpoint_stats(self._command("get_scope_checkpoint", params), "get_scope_checkpoint")
+
+    def scope_checkpoint(self, level: ScopeCheckpointLevel) -> ScopeCheckpointResult:
+        """Send the running request a hidden scope checkpoint at its next tool round: `light` re-checks scope, `severe` wraps up, `hard` stops and answers with what it has. `severe` and `hard` also ask running subagents to wrap up. `queued` is false when no request is running."""
+        params: dict[str, object] = {}
+        params["level"] = level
+        return parse_scope_checkpoint_result(self._command("scope_checkpoint", params), "scope_checkpoint")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
@@ -4040,6 +4094,9 @@ __all__ = [
     "RpcAgentEvent",
     "RpcFrameErrorEvent",
     "RpcNotification",
+    "ScopeCheckpointLevel",
+    "ScopeCheckpointResult",
+    "ScopeCheckpointStats",
     "SelectOptionDetail",
     "SelectUiRequest",
     "SessionCredits",
@@ -4217,6 +4274,8 @@ __all__ = [
     "parse_retry_fallback_succeeded_event",
     "parse_rpc_agent_event",
     "parse_rpc_frame_error_event",
+    "parse_scope_checkpoint_result",
+    "parse_scope_checkpoint_stats",
     "parse_select_option_detail",
     "parse_select_ui_request",
     "parse_session_credits",

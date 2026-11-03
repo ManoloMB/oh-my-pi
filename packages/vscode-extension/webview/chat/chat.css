@@ -2492,6 +2492,157 @@ code {
 	}
 }
 
+/* Scope checkpoint: stopwatch button (while MarIA Code works) and its confirmation popup. */
+
+.scope-checkpoint {
+	position: relative;
+	display: flex;
+}
+
+.scope-checkpoint-toggle {
+	width: 28px;
+	height: 28px;
+	border-radius: 9999px;
+}
+
+.scope-checkpoint-toggle[aria-expanded="true"] {
+	background: var(--c-hover);
+	color: var(--omp-accent);
+}
+
+.scope-checkpoint-popover {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 8px);
+	z-index: 10;
+	width: 320px;
+	max-width: calc(100vw - 32px);
+	padding: 12px;
+	border-radius: var(--r-xl);
+	border: 1px solid var(--c-border-heavy);
+	background: var(--menu-bg);
+	box-shadow: var(--menu-shadow);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	font-size: var(--fs-sm);
+	cursor: default;
+}
+
+.scope-checkpoint-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.scope-checkpoint-title {
+	flex: 1;
+	font-size: var(--fs);
+	font-weight: 500;
+}
+
+.scope-checkpoint-stats {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 6px;
+}
+
+.scope-checkpoint-stat {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 10px;
+	border-radius: var(--r-md);
+	background: var(--c-surface);
+	color: var(--c-fg-2);
+}
+
+.scope-checkpoint-value {
+	color: var(--c-fg);
+	font-size: calc(var(--fs) + 3px);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.scope-checkpoint-note,
+.scope-checkpoint-status {
+	margin: 0;
+	color: var(--c-fg-3);
+}
+
+.scope-checkpoint-options {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.scope-checkpoint-option {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	padding: 7px 10px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: var(--r-md);
+	background: transparent;
+	color: var(--c-fg-2);
+	font-size: var(--fs-sm);
+	text-align: left;
+}
+
+.scope-checkpoint-option:hover {
+	background: var(--c-hover);
+}
+
+.scope-checkpoint-option-label {
+	color: var(--c-fg);
+	font-weight: 600;
+}
+
+.scope-checkpoint-option[aria-checked="true"] {
+	border-color: var(--omp-accent);
+	background: color-mix(in srgb, var(--omp-accent) 10%, transparent);
+}
+
+.scope-checkpoint-option.hard[aria-checked="true"] {
+	border-color: var(--c-error);
+	background: color-mix(in srgb, var(--c-error) 12%, transparent);
+}
+
+.scope-checkpoint-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.scope-checkpoint-cancel,
+.scope-checkpoint-send {
+	height: 24px;
+	padding: 0 12px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: 9999px;
+	background: transparent;
+	color: var(--c-fg);
+	font-size: var(--fs-sm);
+	white-space: nowrap;
+}
+
+.scope-checkpoint-cancel:hover {
+	background: var(--c-hover);
+}
+
+.scope-checkpoint-send {
+	border-color: var(--omp-accent);
+	background: var(--omp-accent);
+	color: var(--omp-accent-fg);
+	font-weight: 500;
+}
+
+.scope-checkpoint-send:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
 /* Context meter: ring button plus its popover */
 
 .context-meter {

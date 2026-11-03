@@ -204,6 +204,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		unwrap: "notified",
 	},
 	{
+		name: "get_scope_checkpoint",
+		doc: "Active time and tool rounds of the current request, for deciding whether to send a scope checkpoint.",
+		result: "ScopeCheckpointStats",
+	},
+	{
+		name: "scope_checkpoint",
+		doc: "Send the running request a hidden scope checkpoint at its next tool round: `light` re-checks scope, `severe` wraps up, `hard` stops and answers with what it has. `severe` and `hard` also ask running subagents to wrap up. `queued` is false when no request is running.",
+		params: { level: "ScopeCheckpointLevel" },
+		result: { queued: "boolean", subagents: "number.integer" },
+	},
+	{
 		name: "live_start",
 		doc: "Start a live voice session bound to this session; returns the voice in use.",
 		params: { "voice?": "string", "instructions?": "string" },

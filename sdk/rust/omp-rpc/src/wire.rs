@@ -3417,6 +3417,44 @@ pub struct SubagentMessages {
 	pub messages: Vec<AgentMessage>,
 }
 
+/// User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ScopeCheckpointLevel {
+	#[serde(rename = "light")]
+	Light,
+	#[serde(rename = "severe")]
+	Severe,
+	#[serde(rename = "hard")]
+	Hard,
+}
+
+impl ScopeCheckpointLevel {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Light => "light",
+			Self::Severe => "severe",
+			Self::Hard => "hard",
+		}
+	}
+}
+
+/// Work done on the current request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeCheckpointStats {
+	/// A request is running and can receive a checkpoint.
+	pub running: bool,
+	/// Active time since the latest request started, excluding time between runs and time blocked on `ask`.
+	#[serde(rename = "activeMs")]
+	pub active_ms: i64,
+	/// Model turns that called tools since the latest request started.
+	#[serde(rename = "toolRounds")]
+	pub tool_rounds: i64,
+	/// Tool calls the model made since the latest request started; one turn may make several.
+	#[serde(rename = "toolCalls")]
+	pub tool_calls: i64,
+}
+
 /// Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BtwStatus {
@@ -5354,6 +5392,17 @@ pub struct HurrySubagentsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeCheckpointParams {
+	pub level: ScopeCheckpointLevel,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeCheckpointResult {
+	pub queued: bool,
+	pub subagents: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveStartParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub voice: Option<String>,
@@ -6571,6 +6620,36 @@ impl Command for HurrySubagentsCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<HurrySubagentsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.notified)
+	}
+}
+
+/// Active time and tool rounds of the current request, for deciding whether to send a scope checkpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetScopeCheckpointCommand {}
+
+impl Command for GetScopeCheckpointCommand {
+	const NAME: &'static str = "get_scope_checkpoint";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ScopeCheckpointStats;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ScopeCheckpointStats>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Send the running request a hidden scope checkpoint at its next tool round: `light` re-checks scope, `severe` wraps up, `hard` stops and answers with what it has. `severe` and `hard` also ask running subagents to wrap up. `queued` is false when no request is running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeCheckpointCommand {
+	pub level: ScopeCheckpointLevel,
+}
+
+impl Command for ScopeCheckpointCommand {
+	const NAME: &'static str = "scope_checkpoint";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ScopeCheckpointResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ScopeCheckpointResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

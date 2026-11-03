@@ -1,69 +1,48 @@
 import type { AgentEvent, AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import type { Settings } from "../config/settings";
 import scopeCheckpointPrompt from "../prompts/system/scope-checkpoint.md" with { type: "text" };
 import wrapUpRequestPrompt from "../prompts/system/wrap-up-request.md" with { type: "text" };
-import {
-	cfgModelScopeCheckpointEnabled,
-	cfgModelScopeCheckpointMinutes,
-	cfgModelScopeCheckpointSubagentMinutes,
-} from "./settings";
 
 const SCOPE_CHECKPOINT_MESSAGE_TYPE = "scope-checkpoint";
 const WRAP_UP_REQUEST_MESSAGE_TYPE = "wrap-up-request";
-const SCOPE_CHECKPOINT_MAX_PER_CYCLE = 2;
-/** Tool rounds required before each checkpoint (since request start / since the previous checkpoint). */
-const SCOPE_CHECKPOINT_MIN_TOOL_ROUNDS = 8;
-/** A main agent's first checkpoint needs fewer rounds: a short request may still have run long. */
-const MAIN_FIRST_CHECKPOINT_MIN_TOOL_ROUNDS = 4;
 /** Tools whose execution time is the user's, not the agent's. */
 const USER_WAIT_TOOLS: Record<string, true> = { ask: true };
-/** Tool that hands work to subagents; a main run calling it delegates. */
-const DELEGATION_TOOL = "task";
-/** omp's step-list tool (`todo_write` in older sessions). */
-const TODO_TOOLS: Record<string, true> = { todo: true, todo_write: true };
-/** Step statuses that close a step. */
-const CLOSED_TODO_STATUSES: Record<string, true> = { completed: true, abandoned: true };
 
-/** Whether a `todo` result's step list (`details.phases`) has steps left; `undefined` when it carries none. */
-function hasOpenSteps(result: unknown): boolean | undefined {
-	const details = (result as { details?: { phases?: unknown } } | undefined)?.details;
-	if (!Array.isArray(details?.phases)) return undefined;
-	return details.phases.some(
-		(phase: { tasks?: { status?: string }[] }) =>
-			Array.isArray(phase?.tasks) && phase.tasks.some(task => !CLOSED_TODO_STATUSES[task?.status ?? ""]),
-	);
+/**
+ * How firmly a user-requested checkpoint pushes: `light` re-checks remaining
+ * work against the request, `severe` asks to wrap up, `hard` asks to stop and
+ * answer with what the agent has.
+ */
+export type ScopeCheckpointLevel = "light" | "severe" | "hard";
+
+const LEVEL_RANK: Record<ScopeCheckpointLevel, number> = { light: 1, severe: 2, hard: 3 };
+
+/** Work done on the current request, as the user sees it before sending a checkpoint. */
+export interface ScopeCheckpointStats {
+	/** A request is running and can receive a checkpoint. */
+	running: boolean;
+	/** Active time since the latest request started, excluding time between runs and time blocked on `ask`. */
+	activeMs: number;
+	/** Model turns that called tools since the latest request started. */
+	toolRounds: number;
+	/** Tool calls the model made since the latest request started; one turn may make several. */
+	toolCalls: number;
 }
 
 /** Capabilities the scope checkpoint borrows from its owning session. */
 export interface ScopeCheckpointHost {
-	settings: Settings;
 	agentKind(): "main" | "sub";
-	planModeEnabled(): boolean;
-	delegateModeEnabled(): boolean;
 }
 
 /**
- * Hidden mid-work reminder asking a long-running agent to re-check its
- * remaining work against the literal request. Fires at most twice per request:
- * once the run has been active for the configured minutes (excluding time
- * between runs and time blocked on the user) AND has made enough tool rounds
- * (4 for a main agent's first checkpoint, 8 otherwise), then again at twice
- * that time after 8 more rounds.
+ * Hidden mid-work reminders the user sends on demand: a scope checkpoint at one
+ * of three {@link ScopeCheckpointLevel}s ({@link request}) or the wrap-up
+ * request `hurry_subagents` sends ({@link requestWrapUp}). Each is delivered
+ * once, at the next tool-round boundary of the current request; a request that
+ * ends first drops it.
  *
- * A main run that delegates (delegate mode on, or a `task` call this request)
- * gets no checkpoint: its time is spent waiting on subagents, and each
- * subagent session runs its own timer on the subagent minutes setting.
- *
- * Plan mode gets none either: neither while the agent drafts the plan nor while
- * it carries out an approved one ({@link startPlanRun}). The execution lasts
- * across follow-up requests while its step list has open steps; a request that
- * starts once every step is closed — or, for a plan run without a step list,
- * once a run that worked on it (an answer that was not aborted) has ended — is
- * a new task.
- *
- * {@link requestWrapUp} queues a one-shot wrap-up reminder delivered at the
- * next tool-round boundary, bypassing the time and round gates.
+ * Also keeps the request's active time, tool rounds, and tool calls ({@link stats})
+ * so the user can judge whether a checkpoint is due.
  */
 export class ScopeCheckpoint {
 	readonly #host: ScopeCheckpointHost;
@@ -72,57 +51,26 @@ export class ScopeCheckpoint {
 	#userWaitStartedAt: number | undefined;
 	#userWaitMs = 0;
 	#toolRounds = 0;
-	#roundsAtLastCheckpoint = 0;
-	#fired = 0;
+	#toolCalls = 0;
 	#lastAssistantStopReason: string | undefined;
-	#delegated = false;
 	#wrapUpPending = false;
-	/** An approved plan is being carried out. */
-	#planRunning = false;
-	/** Whether the plan run's latest step list has open steps; `undefined` until one is written. */
-	#planStepsOpen: boolean | undefined;
-	/** The model answered (not aborted) since the approval: the run is working on the plan. */
-	#planWorked = false;
-	/** A run that worked on the plan ended. */
-	#planRunEnded = false;
+	#pendingLevel: ScopeCheckpointLevel | undefined;
 
 	constructor(host: ScopeCheckpointHost) {
 		this.#host = host;
 	}
 
-	/**
-	 * Resets per-request time, round, checkpoint, delegation, and wrap-up state at
-	 * the start of a request, which also ends a finished plan run.
-	 */
+	/** Resets per-request time, rounds, and pending reminders at the start of a request. */
 	resetCycle(): void {
-		const planDone = this.#planStepsOpen === false || (this.#planStepsOpen === undefined && this.#planRunEnded);
-		if (this.#planRunning && planDone) this.endPlanRun();
 		this.#activeMs = 0;
 		this.#runStartedAt = undefined;
 		this.#userWaitStartedAt = undefined;
 		this.#userWaitMs = 0;
 		this.#toolRounds = 0;
-		this.#roundsAtLastCheckpoint = 0;
-		this.#fired = 0;
+		this.#toolCalls = 0;
 		this.#lastAssistantStopReason = undefined;
-		this.#delegated = false;
 		this.#wrapUpPending = false;
-	}
-
-	/** The user approved a plan: carrying it out gets no checkpoint until it is done. */
-	startPlanRun(): void {
-		this.#planRunning = true;
-		this.#planStepsOpen = undefined;
-		this.#planWorked = false;
-		this.#planRunEnded = false;
-	}
-
-	/** Drops the plan run (the session changed). */
-	endPlanRun(): void {
-		this.#planRunning = false;
-		this.#planStepsOpen = undefined;
-		this.#planWorked = false;
-		this.#planRunEnded = false;
+		this.#pendingLevel = undefined;
 	}
 
 	/** Synchronous event bookkeeping; MUST run before any await in the session event handler. */
@@ -136,10 +84,8 @@ export class ScopeCheckpoint {
 					this.#activeMs += Date.now() - this.#runStartedAt;
 					this.#runStartedAt = undefined;
 				}
-				if (this.#planWorked) this.#planRunEnded = true;
 				return;
 			case "tool_execution_start":
-				if (event.toolName === DELEGATION_TOOL) this.#delegated = true;
 				if (USER_WAIT_TOOLS[event.toolName]) this.#userWaitStartedAt = Date.now();
 				return;
 			case "tool_execution_end":
@@ -147,16 +93,37 @@ export class ScopeCheckpoint {
 					this.#userWaitMs += Date.now() - this.#userWaitStartedAt;
 					this.#userWaitStartedAt = undefined;
 				}
-				if (this.#planRunning && TODO_TOOLS[event.toolName] && !event.isError) {
-					this.#planStepsOpen = hasOpenSteps(event.result) ?? this.#planStepsOpen;
-				}
 				return;
 			case "message_end":
 				if (event.message.role !== "assistant") return;
 				this.#lastAssistantStopReason = event.message.stopReason;
 				if (event.message.stopReason === "toolUse") this.#toolRounds++;
-				if (this.#planRunning && event.message.stopReason !== "aborted") this.#planWorked = true;
+				for (const block of event.message.content) if (block.type === "toolCall") this.#toolCalls++;
 				return;
+		}
+	}
+
+	/** Active time, tool rounds, and tool calls of the current request; `running` comes from the session. */
+	stats(running: boolean): ScopeCheckpointStats {
+		const now = Date.now();
+		const waiting = this.#userWaitStartedAt !== undefined ? now - this.#userWaitStartedAt : 0;
+		const activeMs =
+			this.#activeMs +
+			(this.#runStartedAt !== undefined ? now - this.#runStartedAt : 0) -
+			this.#userWaitMs -
+			waiting;
+		return {
+			running,
+			activeMs: Math.max(0, activeMs),
+			toolRounds: this.#toolRounds,
+			toolCalls: this.#toolCalls,
+		};
+	}
+
+	/** Queue a checkpoint for the next tool-round boundary; a firmer level replaces a pending lighter one. */
+	request(level: ScopeCheckpointLevel): void {
+		if (this.#pendingLevel === undefined || LEVEL_RANK[level] > LEVEL_RANK[this.#pendingLevel]) {
+			this.#pendingLevel = level;
 		}
 	}
 
@@ -165,63 +132,43 @@ export class ScopeCheckpoint {
 		this.#wrapUpPending = true;
 	}
 
-	/** Takes the next wrap-up or checkpoint message when its gates pass; polled by the session's aside provider. */
-	take(): AgentMessage | null {
-		// The aside provider is also polled at the stop boundary, where a message would force an
-		// extra model turn after the agent finished; inject only between tool rounds.
-		if (this.#lastAssistantStopReason !== "toolUse") return null;
-		const now = Date.now();
+	/**
+	 * Takes the pending wrap-up request; polled by the session's aside provider. The provider is
+	 * also polled at the stop boundary, where a message would force an extra model turn after the
+	 * agent finished, so both takers inject only between tool rounds.
+	 */
+	takeWrapUp(): AgentMessage | null {
+		if (!this.#wrapUpPending || this.#lastAssistantStopReason !== "toolUse") return null;
+		this.#wrapUpPending = false;
 		const kind = this.#host.agentKind();
-		if (this.#wrapUpPending) {
-			this.#wrapUpPending = false;
-			logger.debug("Wrap-up request delivered", { agentKind: kind });
-			return {
-				role: "custom",
-				customType: WRAP_UP_REQUEST_MESSAGE_TYPE,
-				content: prompt.render(wrapUpRequestPrompt, { lead: kind === "main" }),
-				display: false,
-				attribution: "agent",
-				timestamp: now,
-			};
-		}
-		const settings = this.#host.settings;
-		if (!cfgModelScopeCheckpointEnabled.get(settings)) return null;
-		if (this.#host.planModeEnabled() || this.#planRunning) return null;
-		if (kind === "main" && (this.#delegated || this.#host.delegateModeEnabled())) return null;
-		const minutes =
-			kind === "sub"
-				? cfgModelScopeCheckpointSubagentMinutes.get(settings)
-				: cfgModelScopeCheckpointMinutes.get(settings);
-		if (!(minutes > 0)) return null;
-		if (this.#fired >= SCOPE_CHECKPOINT_MAX_PER_CYCLE) return null;
-		const elapsedMs =
-			this.#activeMs + (this.#runStartedAt !== undefined ? now - this.#runStartedAt : 0) - this.#userWaitMs;
-		if (elapsedMs < minutes * 60_000 * (this.#fired + 1)) return null;
-		const minRounds =
-			kind === "main" && this.#fired === 0
-				? MAIN_FIRST_CHECKPOINT_MIN_TOOL_ROUNDS
-				: SCOPE_CHECKPOINT_MIN_TOOL_ROUNDS;
-		if (this.#toolRounds - this.#roundsAtLastCheckpoint < minRounds) return null;
-		this.#fired++;
-		this.#roundsAtLastCheckpoint = this.#toolRounds;
-		const content = prompt.render(scopeCheckpointPrompt, {
-			toolRounds: this.#toolRounds,
-			second: this.#fired === 2,
-			subagent: kind === "sub",
-		});
-		logger.debug("Scope checkpoint fired", {
-			agentKind: kind,
-			checkpoint: this.#fired,
-			toolRounds: this.#toolRounds,
-			elapsedMs,
-		});
+		logger.debug("Wrap-up request delivered", { agentKind: kind });
+		return {
+			role: "custom",
+			customType: WRAP_UP_REQUEST_MESSAGE_TYPE,
+			content: prompt.render(wrapUpRequestPrompt, { lead: kind === "main" }),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	/** Takes the pending checkpoint between tool rounds (see {@link takeWrapUp}). */
+	takeCheckpoint(): AgentMessage | null {
+		const level = this.#pendingLevel;
+		if (level === undefined || this.#lastAssistantStopReason !== "toolUse") return null;
+		this.#pendingLevel = undefined;
+		logger.debug("Scope checkpoint delivered", { level, toolRounds: this.#toolRounds });
 		return {
 			role: "custom",
 			customType: SCOPE_CHECKPOINT_MESSAGE_TYPE,
-			content,
+			content: prompt.render(scopeCheckpointPrompt, {
+				toolRounds: this.#toolRounds,
+				severe: level === "severe",
+				hard: level === "hard",
+			}),
 			display: false,
 			attribution: "agent",
-			timestamp: now,
+			timestamp: Date.now(),
 		};
 	}
 }

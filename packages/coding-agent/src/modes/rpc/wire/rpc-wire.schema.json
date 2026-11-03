@@ -353,6 +353,28 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_scope_checkpoint",
+				"doc": "Active time and tool rounds of the current request, for deciding whether to send a scope checkpoint.",
+				"params": null,
+				"result": "ScopeCheckpointStats",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "scope_checkpoint",
+				"doc": "Send the running request a hidden scope checkpoint at its next tool round: `light` re-checks scope, `severe` wraps up, `hard` stops and answers with what it has. `severe` and `hard` also ask running subagents to wrap up. `queued` is false when no request is running.",
+				"params": "ScopeCheckpointParams",
+				"result": "ScopeCheckpointResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "live_start",
 				"doc": "Start a live voice session bound to this session; returns the voice in use.",
 				"params": "LiveStartParams",
@@ -3436,6 +3458,43 @@
 				"messages"
 			],
 			"description": "Incremental subagent transcript read."
+		},
+		"ScopeCheckpointLevel": {
+			"enum": [
+				"light",
+				"severe",
+				"hard"
+			],
+			"type": "string",
+			"description": "User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has."
+		},
+		"ScopeCheckpointStats": {
+			"type": "object",
+			"properties": {
+				"running": {
+					"type": "boolean",
+					"description": "A request is running and can receive a checkpoint."
+				},
+				"activeMs": {
+					"type": "integer",
+					"description": "Active time since the latest request started, excluding time between runs and time blocked on `ask`."
+				},
+				"toolRounds": {
+					"type": "integer",
+					"description": "Model turns that called tools since the latest request started."
+				},
+				"toolCalls": {
+					"type": "integer",
+					"description": "Tool calls the model made since the latest request started; one turn may make several."
+				}
+			},
+			"required": [
+				"running",
+				"activeMs",
+				"toolRounds",
+				"toolCalls"
+			],
+			"description": "Work done on the current request."
 		},
 		"BtwStatus": {
 			"enum": [
@@ -6548,6 +6607,32 @@
 			},
 			"required": [
 				"notified"
+			]
+		},
+		"ScopeCheckpointParams": {
+			"type": "object",
+			"properties": {
+				"level": {
+					"$ref": "#/$defs/ScopeCheckpointLevel"
+				}
+			},
+			"required": [
+				"level"
+			]
+		},
+		"ScopeCheckpointResult": {
+			"type": "object",
+			"properties": {
+				"queued": {
+					"type": "boolean"
+				},
+				"subagents": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"queued",
+				"subagents"
 			]
 		},
 		"LiveStartParams": {

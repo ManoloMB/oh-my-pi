@@ -299,6 +299,25 @@ export const stateDefs = {
 		},
 		"Incremental subagent transcript read.",
 	),
+	ScopeCheckpointLevel: doc(
+		"'light' | 'severe' | 'hard'",
+		"User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has.",
+	),
+	ScopeCheckpointStats: doc(
+		{
+			running: doc("boolean", "A request is running and can receive a checkpoint."),
+			activeMs: doc(
+				"number.integer",
+				"Active time since the latest request started, excluding time between runs and time blocked on `ask`.",
+			),
+			toolRounds: doc("number.integer", "Model turns that called tools since the latest request started."),
+			toolCalls: doc(
+				"number.integer",
+				"Tool calls the model made since the latest request started; one turn may make several.",
+			),
+		},
+		"Work done on the current request.",
+	),
 	BtwStatus: doc(
 		"'running' | 'complete' | 'cancelled' | 'error' | 'interrupted'",
 		"Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.",

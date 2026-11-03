@@ -33,7 +33,14 @@ import { ompCommand, readConfig, workspaceCwd, workspaceRoots } from "../config"
 import { ensureNoWorkspaceFolder, rememberNoWorkspaceSession } from "../no-workspace";
 import { lastSystemCa } from "../system-ca";
 import { DialogBridge } from "../dialogs";
-import { type AgentStatus, type ChatUpdate, isUserPrompt, type ModelChoice, type PlanRunView } from "../protocol";
+import {
+	type AgentStatus,
+	type ChatUpdate,
+	isUserPrompt,
+	type ModelChoice,
+	type PlanRunView,
+	type ScopeCheckpointLevel,
+} from "../protocol";
 import { OmpCommandError, OmpProcess, type OmpResult } from "../rpc/omp-process";
 import { PlanRunTracker } from "./plan-run";
 import { userPrompt } from "./prompt-entries";
@@ -42,6 +49,13 @@ import { SubagentRoster } from "./subagent-roster";
 
 /** How often a followed subagent's transcript is re-read while it runs. */
 const WATCH_POLL_MS = 2000;
+
+/** How each scope checkpoint level is named in the chat's notices. */
+const SCOPE_CHECKPOINT_NAMES: Record<ScopeCheckpointLevel, string> = {
+	light: "Light",
+	severe: "Severe",
+	hard: "Hard",
+};
 
 /** Notification frames that are not session events (everything else is forwarded as `event`). */
 const NON_EVENT_FRAMES: Record<string, true> = {
@@ -544,6 +558,26 @@ export class AgentHost implements vscode.Disposable {
 			"info",
 			`Asked ${notified} ${notified === 1 ? "subagent" : "subagents"} to wrap up; each gets the request at its next step.`,
 		);
+	}
+
+	/** Active time and tool rounds of the running request, for the scope checkpoint popup. */
+	async scopeCheckpointStats(): Promise<OmpResult<"get_scope_checkpoint">> {
+		return await this.#requireProcess().request("get_scope_checkpoint");
+	}
+
+	/** Send omp a hidden scope checkpoint; it reaches the model at its next step. */
+	async sendScopeCheckpoint(level: ScopeCheckpointLevel): Promise<void> {
+		const { queued, subagents } = await this.#requireProcess().request("scope_checkpoint", { level });
+		if (!queued) {
+			this.#notice("info", "MarIA Code is not working right now: there is nothing to check.");
+			return;
+		}
+		const name = SCOPE_CHECKPOINT_NAMES[level];
+		const reached =
+			subagents > 0
+				? ` ${subagents} running ${subagents === 1 ? "subagent was" : "subagents were"} asked to wrap up too.`
+				: "";
+		this.#notice("info", `${name} checkpoint sent: MarIA Code gets it at its next step.${reached}`);
 	}
 
 	/** Follow `id`'s requests in the views (`subagentRequests`), or stop following with `null`. */

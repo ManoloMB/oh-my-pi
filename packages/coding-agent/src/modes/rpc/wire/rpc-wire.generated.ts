@@ -731,6 +731,21 @@ export interface SubagentMessages {
 	messages: AgentMessage[];
 }
 
+/** User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has. */
+export type ScopeCheckpointLevel = "light" | "severe" | "hard";
+
+/** Work done on the current request. */
+export interface ScopeCheckpointStats {
+	/** A request is running and can receive a checkpoint. */
+	running: boolean;
+	/** Active time since the latest request started, excluding time between runs and time blocked on `ask`. */
+	activeMs: number;
+	/** Model turns that called tools since the latest request started. */
+	toolRounds: number;
+	/** Tool calls the model made since the latest request started; one turn may make several. */
+	toolCalls: number;
+}
+
 /** Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran. */
 export type BtwStatus = "running" | "complete" | "cancelled" | "error" | "interrupted";
 
@@ -1677,6 +1692,15 @@ export interface HurrySubagentsResult {
 	notified: number;
 }
 
+export interface ScopeCheckpointParams {
+	level: ScopeCheckpointLevel;
+}
+
+export interface ScopeCheckpointResult {
+	queued: boolean;
+	subagents: number;
+}
+
 export interface LiveStartParams {
 	voice?: string;
 	instructions?: string;
@@ -1910,6 +1934,8 @@ export interface RpcWireCommands {
 	cancel_subagent: { params: CancelSubagentParams; result: CancelSubagentResult };
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	hurry_subagents: { params: undefined; result: HurrySubagentsResult };
+	get_scope_checkpoint: { params: undefined; result: ScopeCheckpointStats };
+	scope_checkpoint: { params: ScopeCheckpointParams; result: ScopeCheckpointResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_stop: { params: undefined; result: undefined };
 	live_mute: { params: LiveMuteParams; result: LiveMuteResult };

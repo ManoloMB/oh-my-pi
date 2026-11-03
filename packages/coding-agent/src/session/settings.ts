@@ -345,58 +345,6 @@ export const cfgModelToolCallLoopGuardExemptTools = register({
 	},
 });
 
-export const cfgModelScopeCheckpointEnabled = register({
-	id: "model.scopeCheckpoint.enabled",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "model",
-		group: "Thinking",
-		label: "Scope Checkpoint",
-		description:
-			"On long runs, inject a hidden reminder to re-check scope against the request (at the threshold and at twice the threshold). While the main agent delegates to subagents, each subagent gets its own timer instead",
-	},
-});
-
-export const cfgModelScopeCheckpointMinutes = register({
-	id: "model.scopeCheckpoint.minutes",
-	type: "number",
-	default: 5,
-	ui: {
-		tab: "model",
-		group: "Thinking",
-		label: "Scope Checkpoint Minutes",
-		description: "Active minutes per request before the first scope checkpoint; the second fires at twice this value",
-		options: [
-			{ value: "4", label: "4 minutes" },
-			{ value: "5", label: "5 minutes" },
-			{ value: "6", label: "6 minutes" },
-			{ value: "8", label: "8 minutes" },
-			{ value: "10", label: "10 minutes" },
-		],
-	},
-});
-
-export const cfgModelScopeCheckpointSubagentMinutes = register({
-	id: "model.scopeCheckpoint.subagentMinutes",
-	type: "number",
-	default: 8,
-	ui: {
-		tab: "model",
-		group: "Thinking",
-		label: "Subagent Scope Checkpoint Minutes",
-		description:
-			"Active minutes of each subagent's own run before its first scope checkpoint; the second fires at twice this value",
-		options: [
-			{ value: "4", label: "4 minutes" },
-			{ value: "6", label: "6 minutes" },
-			{ value: "8", label: "8 minutes" },
-			{ value: "10", label: "10 minutes" },
-			{ value: "15", label: "15 minutes" },
-		],
-	},
-});
-
 export const cfgInlineToolDescriptors = register({
 	id: "inlineToolDescriptors",
 	type: "enum",

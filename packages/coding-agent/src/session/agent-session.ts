@@ -462,7 +462,7 @@ const DEFERRED_TITLE_MIN_WORDS = 40;
 /** Cap on the forked title request itself (measured p90 2.3s). */
 const TITLE_FORK_TIMEOUT_MS = 15_000;
 
-import { ScopeCheckpoint } from "./scope-checkpoint";
+import { ScopeCheckpoint, type ScopeCheckpointLevel, type ScopeCheckpointStats } from "./scope-checkpoint";
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
@@ -1758,12 +1758,7 @@ export class AgentSession implements SettingsScope {
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
-		this.#scopeCheckpoint = new ScopeCheckpoint({
-			settings: this.settings,
-			agentKind: () => this.#agentKind,
-			planModeEnabled: () => this.#planModeState?.enabled === true,
-			delegateModeEnabled: () => this.#delegateModeEnabled && this.isDelegateModeAvailable(),
-		});
+		this.#scopeCheckpoint = new ScopeCheckpoint({ agentKind: () => this.#agentKind });
 		this.#modelMentions = new ModelMentionRegistry({
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
@@ -2042,8 +2037,9 @@ export class AgentSession implements SettingsScope {
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
 			// that flips a todo just before this poll suppresses the nudge.
 			thunks.push(() => this.#todo.takeMidRunNudge());
-			// Long-run scope checkpoint — gated to the mid-work boundary inside take().
-			thunks.push(() => this.#scopeCheckpoint.take());
+			// User-requested wrap-up and scope checkpoint — gated to the mid-work boundary inside each taker.
+			thunks.push(() => this.#scopeCheckpoint.takeWrapUp());
+			thunks.push(() => this.#scopeCheckpoint.takeCheckpoint());
 			const contextNotesReminder = this.#experimentalContextNotesReminder;
 			if (contextNotesReminder) {
 				this.#experimentalContextNotesReminder = undefined;
@@ -6839,6 +6835,22 @@ export class AgentSession implements SettingsScope {
 		return true;
 	}
 
+	/**
+	 * Send the running request a user-requested scope checkpoint at `level`; it lands
+	 * as a hidden reminder at the next tool-round boundary. Returns false when no
+	 * request is running to receive it.
+	 */
+	requestScopeCheckpoint(level: ScopeCheckpointLevel): boolean {
+		if (!this.isStreaming) return false;
+		this.#scopeCheckpoint.request(level);
+		return true;
+	}
+
+	/** Active time and tool rounds of the current request, for a host deciding whether to send a checkpoint. */
+	getScopeCheckpointStats(): ScopeCheckpointStats {
+		return this.#scopeCheckpoint.stats(this.isStreaming);
+	}
+
 	#assertVibeSessionTransitionAllowed(action: string): void {
 		if (this.#vibeModeState?.enabled) {
 			throw new Error(`Cannot ${action} while vibe mode is active. Exit vibe mode first.`);
@@ -6872,10 +6884,8 @@ export class AgentSession implements SettingsScope {
 		this.#planReferenceSent = true;
 	}
 
-	/** Points the next turns at the approved plan; every approval sets it, so its execution starts here. */
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
-		this.#scopeCheckpoint.startPlanRun();
 	}
 
 	getPlanReferencePath(): string {
@@ -9984,7 +9994,6 @@ export class AgentSession implements SettingsScope {
 
 			this.#todo.resetCycle();
 			this.#scopeCheckpoint.resetCycle();
-			this.#scopeCheckpoint.endPlanRun();
 			this.#planReferenceSent = false;
 			this.#planReferencePath = "local://PLAN.md";
 			this.#advisors.resetSessionState();
@@ -11648,7 +11657,6 @@ export class AgentSession implements SettingsScope {
 			this.#todo.syncFromBranch();
 			this.#modelMentions.syncFromBranch();
 			if (switchingToDifferentSession) {
-				this.#scopeCheckpoint.endPlanRun();
 				this.#closeAllProviderSessions("session switch");
 			} else if (didReloadConversationChange) {
 				this.#closeAllProviderSessions("session reload");

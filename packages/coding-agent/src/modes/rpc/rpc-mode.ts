@@ -53,6 +53,7 @@ import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
+import type { ScopeCheckpointLevel } from "../../session/scope-checkpoint";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
@@ -879,6 +880,32 @@ export function handleRpcHurrySubagents(
 	}
 	if (reached > 0) mainSession.requestWrapUp();
 	return reached;
+}
+
+const SCOPE_CHECKPOINT_LEVELS: Record<string, ScopeCheckpointLevel> = {
+	light: "light",
+	severe: "severe",
+	hard: "hard",
+};
+
+/**
+ * Handle RPC `scope_checkpoint`: queue a user-requested checkpoint on the main
+ * session. `severe` and `hard` also ask every running subagent to wrap up, so a
+ * main agent blocked on `task` gets its results, and the checkpoint, sooner.
+ */
+export function handleRpcScopeCheckpoint(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents"> | undefined,
+	mainSession: Pick<AgentSession, "requestScopeCheckpoint">,
+	level: ScopeCheckpointLevel,
+): { queued: boolean; subagents: number } {
+	const queued = mainSession.requestScopeCheckpoint(level);
+	let subagents = 0;
+	if (queued && level !== "light" && subagentRegistry) {
+		for (const snapshot of subagentRegistry.getSubagents()) {
+			if (resolveOwnedLiveSubagent(subagentRegistry, snapshot.id)?.session.requestWrapUp()) subagents++;
+		}
+	}
+	return { queued, subagents };
 }
 
 export async function handleRpcSessionChange(
@@ -2365,6 +2392,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return error(id, "hurry_subagents", "Subagent event bus is unavailable");
 				}
 				return success(id, "hurry_subagents", { notified: handleRpcHurrySubagents(subagentRegistry, session) });
+			}
+
+			case "get_scope_checkpoint":
+				return success(id, "get_scope_checkpoint", session.getScopeCheckpointStats());
+
+			case "scope_checkpoint": {
+				const level = SCOPE_CHECKPOINT_LEVELS[command.level];
+				if (!level) {
+					return error(id, "scope_checkpoint", "`level` must be one of: light, severe, hard.");
+				}
+				return success(id, "scope_checkpoint", handleRpcScopeCheckpoint(subagentRegistry, session, level));
 			}
 
 			// =================================================================

@@ -497,6 +497,17 @@ export class ChatSession implements vscode.Disposable, HostView {
 			case "hurrySubagents":
 				await this.#requireHost().hurrySubagents();
 				return;
+			case "getScopeCheckpoint": {
+				const stats = await this.#host?.scopeCheckpointStats().catch((error: unknown) => {
+					this.log.appendLine(`[warning] get_scope_checkpoint failed: ${errorMessage(error)}`);
+					return undefined;
+				});
+				this.post({ type: "scopeCheckpoint", stats: stats ?? null });
+				return;
+			}
+			case "sendScopeCheckpoint":
+				await this.#requireHost().sendScopeCheckpoint(request.level);
+				return;
 			case "watchSubagent":
 				this.#host?.watchSubagent(request.id);
 				return;

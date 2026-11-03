@@ -15,6 +15,7 @@ import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
+import type { ScopeCheckpointLevel, ScopeCheckpointStats } from "../../session/scope-checkpoint";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -874,6 +875,21 @@ export class RpcClient {
 	async hurrySubagents(): Promise<number> {
 		const response = await this.#send({ type: "hurry_subagents" });
 		return this.#getData<{ notified: number }>(response).notified;
+	}
+
+	/** Active time and tool rounds of the current request. */
+	async getScopeCheckpoint(): Promise<ScopeCheckpointStats> {
+		const response = await this.#send({ type: "get_scope_checkpoint" });
+		return this.#getData<ScopeCheckpointStats>(response);
+	}
+
+	/**
+	 * Send the running request a hidden scope checkpoint; `severe` and `hard` also ask
+	 * running subagents to wrap up. `queued` is false when no request is running.
+	 */
+	async scopeCheckpoint(level: ScopeCheckpointLevel): Promise<{ queued: boolean; subagents: number }> {
+		const response = await this.#send({ type: "scope_checkpoint", level });
+		return this.#getData<{ queued: boolean; subagents: number }>(response);
 	}
 
 	/**

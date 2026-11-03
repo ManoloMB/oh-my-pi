@@ -12,6 +12,7 @@ import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
+import type { ScopeCheckpointLevel, ScopeCheckpointStats } from "../../session/scope-checkpoint";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
@@ -63,6 +64,8 @@ export type RpcCommand =
 	| { id?: string; type: "set_plan_mode"; enabled: boolean }
 	| { id?: string; type: "set_delegate_mode"; enabled: boolean }
 	| { id?: string; type: "hurry_subagents" }
+	| { id?: string; type: "get_scope_checkpoint" }
+	| { id?: string; type: "scope_checkpoint"; level: ScopeCheckpointLevel }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
@@ -449,6 +452,20 @@ export type RpcResponse =
 	  }
 	| { id?: string; type: "response"; command: "set_delegate_mode"; success: true; data: { enabled: boolean } }
 	| { id?: string; type: "response"; command: "hurry_subagents"; success: true; data: { notified: number } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_scope_checkpoint";
+			success: true;
+			data: ScopeCheckpointStats;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "scope_checkpoint";
+			success: true;
+			data: { queued: boolean; subagents: number };
+	  }
 	| { id?: string; type: "response"; command: "set_ask_dialog"; success: true; data: { enabled: boolean } }
 	| {
 			id?: string;

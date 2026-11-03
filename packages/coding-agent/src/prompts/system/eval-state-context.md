@@ -1,9 +1,9 @@
 <system-reminder>
-Eval runtime state is host-retained, not reconstructed from transcript text.
 {{#if stateSummary}}
 {{stateSummary}}
+Alive → its definitions are still loaded; reuse them. Dead → redefine what a cell needs before running it. A script missing from the list may still be loaded.
 {{else}}
-No retained eval runtime is registered in this process. Eval variables, imports, and kernels referenced in earlier session history were not restored; re-run required setup before using them.
+No eval kernel is running in this process: variables and functions from earlier eval cells are gone.
 {{/if}}
-Dead or absent kernel → re-run needed setup. Alive kernel → reuse retained definitions. An omitted script path does not mean its definitions were lost. NEVER infer variable values from this snapshot.
+Results already in the transcript stay valid; use them without re-running anything. Redefine setup only right before eval code that needs it. NEVER guess variable values from this note. No need to mention it to the user.
 </system-reminder>

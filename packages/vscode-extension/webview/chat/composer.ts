@@ -11,6 +11,7 @@ import type {
 	ChatUpdate,
 	ImageContent,
 	PlanRunView,
+	ScopeCheckpointStats,
 	SessionState,
 	SessionStats,
 	SubagentView,
@@ -26,6 +27,7 @@ import { GhostText } from "./ghost-text";
 import { openLightbox } from "./lightbox";
 import { ModelPicker } from "./model-picker";
 import { PlanRunPanel } from "./plan-run-panel";
+import { ScopeCheckpointPanel } from "./scope-checkpoint";
 import type { PromptRecall } from "./transcript";
 import { SubagentPanel } from "./subagent-panel";
 
@@ -94,6 +96,7 @@ export class Composer {
 	#send: HTMLButtonElement;
 	#stop: HTMLButtonElement;
 	#meter: ContextMeter;
+	#scopeCheckpoint: ScopeCheckpointPanel;
 	#cleanupOffer: CleanupOffer;
 	#thinkingToggle: HTMLButtonElement;
 	#thinkingExpanded = false;
@@ -147,6 +150,7 @@ export class Composer {
 		this.#stop.hidden = true;
 		this.picker = new ModelPicker(post);
 		this.#meter = new ContextMeter(post);
+		this.#scopeCheckpoint = new ScopeCheckpointPanel(post);
 		this.#cleanupOffer = new CleanupOffer(post);
 		this.#dictation = new DictationControl(post, state => this.#onDictationState(state));
 		this.#ghost = new GhostText(this.#input, post);
@@ -216,6 +220,7 @@ export class Composer {
 						{ className: "composer-footer-right" },
 						this.#meter.element,
 						this.#dictation.element,
+						this.#scopeCheckpoint.element,
 						this.#stop,
 						this.#send,
 					),
@@ -228,6 +233,7 @@ export class Composer {
 	setBusy(busy: boolean): void {
 		this.#busy = busy;
 		this.#meter.setBusy(busy);
+		this.#scopeCheckpoint.setBusy(busy);
 		this.#cleanupOffer.setBusy(busy);
 		this.#refresh();
 	}
@@ -242,6 +248,11 @@ export class Composer {
 	setUsage(state: SessionState, stats: SessionStats | undefined): void {
 		this.#meter.setUsage(state, stats);
 		this.#cleanupOffer.setUsage(state, stats);
+	}
+
+	/** omp's answer to the scope checkpoint popup's `getScopeCheckpoint`. */
+	setScopeCheckpointStats(stats: ScopeCheckpointStats | null): void {
+		this.#scopeCheckpoint.setStats(stats);
 	}
 
 	setCommands(commands: AvailableSlashCommand[]): void {

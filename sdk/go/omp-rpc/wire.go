@@ -3267,6 +3267,58 @@ func (v *SubagentMessages) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+// User-requested checkpoint strength: re-check scope, wrap up, or stop and answer with what the agent has.
+type ScopeCheckpointLevel string
+
+const (
+	ScopeCheckpointLevelLight  ScopeCheckpointLevel = "light"
+	ScopeCheckpointLevelSevere ScopeCheckpointLevel = "severe"
+	ScopeCheckpointLevelHard   ScopeCheckpointLevel = "hard"
+)
+
+func (v *ScopeCheckpointLevel) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ScopeCheckpointLevel")
+	if err != nil {
+		return err
+	}
+	switch value := ScopeCheckpointLevel(s); value {
+	case ScopeCheckpointLevelLight, ScopeCheckpointLevelSevere, ScopeCheckpointLevelHard:
+		*v = value
+		return nil
+	}
+	return unknownValue("ScopeCheckpointLevel", s)
+}
+
+// Work done on the current request.
+type ScopeCheckpointStats struct {
+	// A request is running and can receive a checkpoint.
+	Running bool `json:"running"`
+	// Active time since the latest request started, excluding time between runs and time blocked on `ask`.
+	ActiveMs int64 `json:"activeMs"`
+	// Model turns that called tools since the latest request started.
+	ToolRounds int64 `json:"toolRounds"`
+	// Tool calls the model made since the latest request started; one turn may make several.
+	ToolCalls int64 `json:"toolCalls"`
+}
+
+func (v *ScopeCheckpointStats) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ScopeCheckpointStats", v.decodeFrom)
+}
+
+func (v *ScopeCheckpointStats) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ScopeCheckpointStats
+	d := fieldDecoder{raw: raw, owner: "ScopeCheckpointStats"}
+	d.required("running", &out.Running)
+	d.required("activeMs", &out.ActiveMs)
+	d.required("toolRounds", &out.ToolRounds)
+	d.required("toolCalls", &out.ToolCalls)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.
 type BtwStatus string
 
@@ -7283,6 +7335,27 @@ func (v *HurrySubagentsResult) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+type ScopeCheckpointResult struct {
+	Queued    bool  `json:"queued"`
+	Subagents int64 `json:"subagents"`
+}
+
+func (v *ScopeCheckpointResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ScopeCheckpointResult", v.decodeFrom)
+}
+
+func (v *ScopeCheckpointResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ScopeCheckpointResult
+	d := fieldDecoder{raw: raw, owner: "ScopeCheckpointResult"}
+	d.required("queued", &out.Queued)
+	d.required("subagents", &out.Subagents)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type LiveStartResult struct {
 	Voice string `json:"voice"`
 }
@@ -7990,6 +8063,25 @@ func (c Commands) HurrySubagents(ctx context.Context) (int64, error) {
 	var out HurrySubagentsResult
 	err := c.call(ctx, "hurry_subagents", nil, 0, &out)
 	return out.Notified, err
+}
+
+// GetScopeCheckpoint sends "get_scope_checkpoint": Active time and tool rounds of the current request, for deciding whether to send a scope checkpoint.
+func (c Commands) GetScopeCheckpoint(ctx context.Context) (ScopeCheckpointStats, error) {
+	var out ScopeCheckpointStats
+	err := c.call(ctx, "get_scope_checkpoint", nil, 0, &out)
+	return out, err
+}
+
+// ScopeCheckpointCommand holds the parameters of "scope_checkpoint".
+type ScopeCheckpointCommand struct {
+	Level ScopeCheckpointLevel `json:"level"`
+}
+
+// ScopeCheckpoint sends "scope_checkpoint": Send the running request a hidden scope checkpoint at its next tool round: `light` re-checks scope, `severe` wraps up, `hard` stops and answers with what it has. `severe` and `hard` also ask running subagents to wrap up. `queued` is false when no request is running.
+func (c Commands) ScopeCheckpoint(ctx context.Context, p ScopeCheckpointCommand) (ScopeCheckpointResult, error) {
+	var out ScopeCheckpointResult
+	err := c.call(ctx, "scope_checkpoint", p, 0, &out)
+	return out, err
 }
 
 // LiveStartCommand holds the parameters of "live_start".

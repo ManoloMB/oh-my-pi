@@ -342,7 +342,7 @@ export function formatEvalStateContext(
 			lines.push(...formatRuntime(runtime, index, languageCounts[runtime.language]));
 			languageIndexes[runtime.language]++;
 		}
-		stateSummary = `Current host registry:\n${lines.join("\n")}`;
+		stateSummary = `Eval kernels in this process:\n${lines.join("\n")}`;
 	}
 	return prompt.render(evalStateContextPrompt, { stateSummary }).trim();
 }

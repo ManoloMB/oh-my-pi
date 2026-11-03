@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.24.0]
+
+### Added
+
+- A stopwatch button in the composer while MarIA Code works opens a scope checkpoint popup: how long it has been working on your request, how many turns it took and how many tool calls it made, and a choice of checkpoint — Light (hurry: every step must add something needed, no overengineering), Severe (only the essentials, deliver in about 3 rounds) or Hard (last tool calls only to leave nothing half-done, then answer with what it has). Confirming sends it as a hidden reminder that MarIA Code gets at its next step; omp no longer sends these checkpoints on its own
+
 ## [0.23.0]
 
 ### Changed

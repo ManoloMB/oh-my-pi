@@ -17,6 +17,8 @@ import type {
 	ImageContent,
 	RpcAgentEvent,
 	SessionState,
+	ScopeCheckpointLevel,
+	ScopeCheckpointStats,
 	SessionStats,
 	ThinkingLevel,
 	TodoPhase,
@@ -30,6 +32,8 @@ export type {
 	CustomMessage,
 	ImageContent,
 	RpcAgentEvent,
+	ScopeCheckpointLevel,
+	ScopeCheckpointStats,
 	SessionState,
 	SessionStats,
 	TextContent,
@@ -294,7 +298,9 @@ export type ChatUpdate =
 	 * `waiting`: it is running with no tool in flight, so the model is answering its next request.
 	 * `error`: its transcript could not be read (e.g. a session that is not saved to disk).
 	 */
-	| { type: "subagentRequests"; id: string; requests: SubagentRequestView[]; waiting: boolean; error?: string };
+	| { type: "subagentRequests"; id: string; requests: SubagentRequestView[]; waiting: boolean; error?: string }
+	/** Answer to `getScopeCheckpoint`: the running request's active time and tool rounds; null when omp could not report them. */
+	| { type: "scopeCheckpoint"; stats: ScopeCheckpointStats | null };
 
 /** Chat webview → host. */
 export type ChatRequest =
@@ -328,6 +334,10 @@ export type ChatRequest =
 	| { type: "setDelegateMode"; enabled: boolean }
 	/** Ask every running subagent (and the lead) to wrap up. */
 	| { type: "hurrySubagents" }
+	/** Active time and tool rounds of the running request, answered by `scopeCheckpoint`. */
+	| { type: "getScopeCheckpoint" }
+	/** Send omp a hidden scope checkpoint at `level` (light, severe, hard); the host reports the outcome as a notice. */
+	| { type: "sendScopeCheckpoint"; level: ScopeCheckpointLevel }
 	/** Follow one subagent's requests (`subagentRequests`), or stop with `null`. */
 	| { type: "watchSubagent"; id: string | null }
 	/** Answer a `planReview` with one of its options. */
