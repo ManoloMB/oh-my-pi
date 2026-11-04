@@ -7,6 +7,7 @@
  * posts `openSession`, its pencil renames it in place (`renameSession`), its
  * trash deletes it after the host's confirmation (`deleteSession`). Sessions
  * working in the window show a spinner, those that finished unseen a green dot,
+ * the open one a blue arrow,
  * and those with skill proposals awaiting a decision a yellow pill counting them.
  */
 import type { ChatRequest, SessionActivity, SessionListItem } from "../../src/protocol";
@@ -151,7 +152,7 @@ export class HistoryPanel {
 	}
 
 	/**
-	 * Spinner while the session runs, green dot once it finished unseen, accent dot for
+	 * Spinner while the session runs, green dot once it finished unseen, blue arrow for
 	 * the open one; a fixed-width slot either way so every label lines up.
 	 */
 	#marker(item: SessionListItem): HTMLElement {
@@ -163,7 +164,9 @@ export class HistoryPanel {
 			slot.append(h("span", { className: "history-activity done" }));
 			setTooltip(slot, "Finished while you were in another session");
 		} else if (item.active) {
-			slot.append(h("span", { className: "history-active-dot" }));
+			slot.append(icon("arrowRight"));
+			slot.classList.add("current");
+			setTooltip(slot, "Current chat");
 		}
 		return slot;
 	}

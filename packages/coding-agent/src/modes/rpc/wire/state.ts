@@ -318,6 +318,26 @@ export const stateDefs = {
 		},
 		"Work done on the current request.",
 	),
+	AsyncJobType: doc("'bash' | 'task' | 'eval'", "Kind of work a background job runs."),
+	AsyncJobStatus: doc("'running' | 'completed' | 'failed' | 'cancelled'", "Background job lifecycle."),
+	AsyncJob: doc(
+		{
+			id: doc("string", "Job id, e.g. `bg_3`."),
+			type: "AsyncJobType",
+			status: "AsyncJobStatus",
+			label: doc("string", "What the job does: a bash command's first line, a task's description."),
+			"command?": doc("string", "Full command line of a job that runs a process."),
+			"cwd?": doc("string", "Directory that command started in."),
+			startTime: doc("number.integer", "When the job started, in epoch milliseconds."),
+			"endTime?": doc("number.integer", "When the job settled, in epoch milliseconds."),
+			"exitCode?": doc("number.integer", "Exit status of a settled command."),
+			"output?": doc(
+				"string",
+				"Tail of the job's output: progress while running, the result or error once settled.",
+			),
+		},
+		"One background job of the session.",
+	),
 	BtwStatus: doc(
 		"'running' | 'complete' | 'cancelled' | 'error' | 'interrupted'",
 		"Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.",

@@ -141,6 +141,18 @@ _SCOPE_CHECKPOINT_LEVEL_VALUES: Final[frozenset[str]] = frozenset({"light", "sev
 _decode_scope_checkpoint_level = cast("Decoder[ScopeCheckpointLevel]", literal(_SCOPE_CHECKPOINT_LEVEL_VALUES))
 
 
+AsyncJobType: TypeAlias = Literal["bash", "task", "eval"]
+"""Kind of work a background job runs."""
+_ASYNC_JOB_TYPE_VALUES: Final[frozenset[str]] = frozenset({"bash", "task", "eval"})
+_decode_async_job_type = cast("Decoder[AsyncJobType]", literal(_ASYNC_JOB_TYPE_VALUES))
+
+
+AsyncJobStatus: TypeAlias = Literal["running", "completed", "failed", "cancelled"]
+"""Background job lifecycle."""
+_ASYNC_JOB_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "completed", "failed", "cancelled"})
+_decode_async_job_status = cast("Decoder[AsyncJobStatus]", literal(_ASYNC_JOB_STATUS_VALUES))
+
+
 BtwStatus: TypeAlias = Literal["running", "complete", "cancelled", "error", "interrupted"]
 """Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran."""
 _BTW_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "complete", "cancelled", "error", "interrupted"})
@@ -936,6 +948,29 @@ class ScopeCheckpointStats:
     """Model turns that called tools since the latest request started."""
     tool_calls: int
     """Tool calls the model made since the latest request started; one turn may make several."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class AsyncJob:
+    """One background job of the session."""
+    id: str
+    """Job id, e.g. `bg_3`."""
+    type: AsyncJobType
+    status: AsyncJobStatus
+    label: str
+    """What the job does: a bash command's first line, a task's description."""
+    start_time: int
+    """When the job started, in epoch milliseconds."""
+    command: str | None = None
+    """Full command line of a job that runs a process."""
+    cwd: str | None = None
+    """Directory that command started in."""
+    end_time: int | None = None
+    """When the job settled, in epoch milliseconds."""
+    exit_code: int | None = None
+    """Exit status of a settled command."""
+    output: str | None = None
+    """Tail of the job's output: progress while running, the result or error once settled."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2327,6 +2362,22 @@ def parse_scope_checkpoint_stats(value: object, path: str = "ScopeCheckpointStat
     )
 
 
+def parse_async_job(value: object, path: str = "AsyncJob") -> AsyncJob:
+    payload = expect_object(value, path)
+    return AsyncJob(
+        id=required(payload, "id", decode_str, path),
+        type=required(payload, "type", _decode_async_job_type, path),
+        status=required(payload, "status", _decode_async_job_status, path),
+        label=required(payload, "label", decode_str, path),
+        start_time=required(payload, "startTime", decode_int, path),
+        command=optional(payload, "command", decode_str, path),
+        cwd=optional(payload, "cwd", decode_str, path),
+        end_time=optional(payload, "endTime", decode_int, path),
+        exit_code=optional(payload, "exitCode", decode_int, path),
+        output=optional(payload, "output", decode_str, path),
+    )
+
+
 def parse_btw_history_turn(value: object, path: str = "BtwHistoryTurn") -> BtwHistoryTurn:
     payload = expect_object(value, path)
     return BtwHistoryTurn(
@@ -3482,6 +3533,17 @@ class WireClient:
         params["level"] = level
         return parse_scope_checkpoint_result(self._command("scope_checkpoint", params), "scope_checkpoint")
 
+    def get_async_jobs(self) -> tuple[AsyncJob, ...]:
+        """List the session's background jobs (async bash, task, eval): running first, then the recently settled ones omp still retains."""
+        params: dict[str, object] = {}
+        return required(expect_object(self._command("get_async_jobs", params), "get_async_jobs"), "jobs", array(parse_async_job), "get_async_jobs")
+
+    def cancel_async_job(self, job_id: str) -> bool:
+        """Cancel one running background job; false when the session runs none by that id."""
+        params: dict[str, object] = {}
+        params["jobId"] = job_id
+        return required(expect_object(self._command("cancel_async_job", params), "cancel_async_job"), "cancelled", decode_bool, "cancel_async_job")
+
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
         params: dict[str, object] = {}
@@ -3986,6 +4048,9 @@ __all__ = [
     "AssistantToolCallDeltaEvent",
     "AssistantToolCallEndEvent",
     "AssistantToolCallStartEvent",
+    "AsyncJob",
+    "AsyncJobStatus",
+    "AsyncJobType",
     "Attribution",
     "AutoCompactionAction",
     "AutoCompactionEndEvent",
@@ -4188,6 +4253,7 @@ __all__ = [
     "parse_assistant_tool_call_delta_event",
     "parse_assistant_tool_call_end_event",
     "parse_assistant_tool_call_start_event",
+    "parse_async_job",
     "parse_auto_compaction_end_event",
     "parse_auto_compaction_start_event",
     "parse_auto_retry_end_event",

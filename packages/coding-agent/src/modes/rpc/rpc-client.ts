@@ -28,6 +28,7 @@ import {
 } from "./rpc-messages";
 import type {
 	RpcAbortAndRestoreQueueResult,
+	RpcAsyncJob,
 	RpcAvailableCommandsUpdateFrame,
 	RpcBtwDeltaFrame,
 	RpcBtwRecordFrame,
@@ -890,6 +891,18 @@ export class RpcClient {
 	async scopeCheckpoint(level: ScopeCheckpointLevel): Promise<{ queued: boolean; subagents: number }> {
 		const response = await this.#send({ type: "scope_checkpoint", level });
 		return this.#getData<{ queued: boolean; subagents: number }>(response);
+	}
+
+	/** The session's background jobs (async bash, task, eval): running first, then recently settled. */
+	async getAsyncJobs(): Promise<RpcAsyncJob[]> {
+		const response = await this.#send({ type: "get_async_jobs" });
+		return this.#getData<{ jobs: RpcAsyncJob[] }>(response).jobs;
+	}
+
+	/** Cancel one running background job; false when the session runs none by that id. */
+	async cancelAsyncJob(jobId: string): Promise<boolean> {
+		const response = await this.#send({ type: "cancel_async_job", jobId });
+		return this.#getData<{ cancelled: boolean }>(response).cancelled;
 	}
 
 	/**

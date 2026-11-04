@@ -42,6 +42,7 @@ import {
 	type ScopeCheckpointLevel,
 } from "../protocol";
 import { OmpCommandError, OmpProcess, type OmpResult } from "../rpc/omp-process";
+import { AsyncJobRoster } from "./async-job-roster";
 import { PlanRunTracker } from "./plan-run";
 import { userPrompt } from "./prompt-entries";
 import { SubagentRequestLog } from "./subagent-requests";
@@ -49,6 +50,8 @@ import { SubagentRoster } from "./subagent-roster";
 
 /** How often a followed subagent's transcript is re-read while it runs. */
 const WATCH_POLL_MS = 2000;
+/** How often omp's background jobs are re-read while one runs (omp pushes no job frames). */
+const JOBS_POLL_MS = 2000;
 
 /** How each scope checkpoint level is named in the chat's notices. */
 const SCOPE_CHECKPOINT_NAMES: Record<ScopeCheckpointLevel, string> = {
@@ -187,6 +190,12 @@ export class AgentHost implements vscode.Disposable {
 	#watched: { id: string; log: SubagentRequestLog; reading: boolean; stale: boolean } | undefined;
 	/** Re-reads the watched transcript between progress frames (a long tool call sends none). */
 	#watchTimer: NodeJS.Timeout | undefined;
+	/** Background jobs of the shown session (async bash, task, eval), for the chat's jobs popup. */
+	readonly #jobs = new AsyncJobRoster();
+	#jobsTimer: NodeJS.Timeout | undefined;
+	/** A `get_async_jobs` read is in flight; `#jobsStale` asks it to read again before it ends. */
+	#jobsReading = false;
+	#jobsStale = false;
 	/** The turn being checkpointed: snapshots taken (in the background) as its prompt was sent. */
 	#turn: TurnCheckpoint | undefined;
 	/** Checkpoint snapshots and writes, in order; awaited before anything reads them. */
@@ -297,6 +306,7 @@ export class AgentHost implements vscode.Disposable {
 		for (const review of this.#planReviews.values()) view.post(review.update);
 		view.post(this.#curation);
 		view.post({ type: "subagents", subagents: this.#subagents.list() });
+		view.post({ type: "asyncJobs", jobs: this.#jobs.list() });
 	}
 
 	#setCuration(curation: SkillCuration): void {
@@ -321,6 +331,7 @@ export class AgentHost implements vscode.Disposable {
 		this.#settled = true;
 		this.#setStatus({ phase: "starting" });
 		this.#resetSubagents();
+		this.#resetJobs();
 		process.on("frame", frame => this.#onFrame(process, frame));
 		process.on("uiRequest", request => {
 			if (this.#process === process) this.#dialogs.handle(request);
@@ -334,6 +345,7 @@ export class AgentHost implements vscode.Disposable {
 			this.#busy = false;
 			this.#settled = true;
 			if (this.#curation.status === "running") this.#setCuration(CURATION_IDLE);
+			this.#resetJobs();
 			this.#setStatus({ phase: "stopped", message: reason });
 		});
 		const args = [...readConfig().extraArgs];
@@ -359,6 +371,7 @@ export class AgentHost implements vscode.Disposable {
 		this.#title = undefined;
 		this.#setCuration(CURATION_IDLE);
 		await this.#sendSnapshot(process, this.#views);
+		void this.#refreshJobs();
 	}
 
 	async restart(): Promise<void> {
@@ -382,7 +395,9 @@ export class AgentHost implements vscode.Disposable {
 		this.#title = undefined;
 		this.#setCuration(CURATION_IDLE);
 		this.#resetSubagents();
+		this.#resetJobs();
 		await this.#sendSnapshot(process, this.#views);
+		void this.#refreshJobs();
 	}
 
 	/** Open another session in this process. Aborts a running turn: callers only use it when idle. */
@@ -396,8 +411,10 @@ export class AgentHost implements vscode.Disposable {
 		if (result.cancelled) return;
 		this.#title = undefined;
 		this.#resetSubagents();
+		this.#resetJobs();
 		this.#setCuration(CURATION_IDLE);
 		await this.#sendSnapshot(process, this.#views);
+		void this.#refreshJobs();
 	}
 
 	/**
@@ -408,8 +425,9 @@ export class AgentHost implements vscode.Disposable {
 		const process = this.#requireProcess();
 		if (!this.#busy) {
 			this.#beginTurnCheckpoint();
-			// A new task: the panel lists only its subagents.
+			// A new task: the panels list only its subagents and background jobs.
 			if (this.#subagents.clearFinished()) this.#postSubagents();
+			if (this.#jobs.clearFinished()) this.#postJobs();
 		}
 		await process.request("prompt", {
 			message: text,
@@ -580,6 +598,13 @@ export class AgentHost implements vscode.Disposable {
 		this.#notice("info", `${name} checkpoint sent: MarIA Code gets it at its next step.${reached}`);
 	}
 
+	/** Cancel one running background job, then re-read the list. */
+	async cancelAsyncJob(id: string): Promise<void> {
+		const { cancelled } = await this.#requireProcess().request("cancel_async_job", { jobId: id });
+		if (!cancelled) this.#notice("info", `Background task ${id} is no longer running.`);
+		await this.#refreshJobs();
+	}
+
 	/** Follow `id`'s requests in the views (`subagentRequests`), or stop following with `null`. */
 	watchSubagent(id: string | null): void {
 		clearInterval(this.#watchTimer);
@@ -685,6 +710,7 @@ export class AgentHost implements vscode.Disposable {
 		clearTimeout(this.#refreshTimer);
 		clearTimeout(this.#subagentsTimer);
 		clearInterval(this.#watchTimer);
+		clearTimeout(this.#jobsTimer);
 		void this.#stopProcess();
 		this.#dialogs.dispose();
 		this.#onDidChange.dispose();
@@ -1011,12 +1037,18 @@ export class AgentHost implements vscode.Disposable {
 			case "session_settled":
 				this.#settled = true;
 				this.#onDidChange.fire(this);
+				void this.#refreshJobs();
 				// Settled, not `agent_end`: a non-terminal end, a queued follow-up, a goal continuation
 				// or a background job's result still wakes the agent, so the task is not done yet.
 				if (this.#soundPending) {
 					this.#soundPending = false;
 					if (!this.#soundSuppressed) playCompletionSound(readConfig().completionSound);
 				}
+				break;
+			case "tool_execution_end":
+			case "agent_end":
+				// A bash, task or eval call may have left a job running in the background.
+				void this.#refreshJobs();
 				break;
 			case "extension_error":
 				this.log.appendLine(`[extension error] ${JSON.stringify(frame)}`);
@@ -1085,6 +1117,48 @@ export class AgentHost implements vscode.Disposable {
 	#resetSubagents(): void {
 		this.watchSubagent(null);
 		if (this.#subagents.clear()) this.#postSubagents();
+	}
+
+	#postJobs(): void {
+		this.post({ type: "asyncJobs", jobs: this.#jobs.list() });
+	}
+
+	#resetJobs(): void {
+		clearTimeout(this.#jobsTimer);
+		this.#jobsTimer = undefined;
+		if (this.#jobs.clear()) this.#postJobs();
+	}
+
+	/**
+	 * Re-read omp's background jobs and post them when they changed; while one
+	 * runs, read again every {@link JOBS_POLL_MS}. One read at a time: a call
+	 * while reading marks the result stale, and the reader goes again.
+	 */
+	async #refreshJobs(): Promise<void> {
+		const process = this.process;
+		if (!process) return;
+		if (this.#jobsReading) {
+			this.#jobsStale = true;
+			return;
+		}
+		this.#jobsReading = true;
+		clearTimeout(this.#jobsTimer);
+		this.#jobsTimer = undefined;
+		try {
+			do {
+				this.#jobsStale = false;
+				const { jobs } = await process.request("get_async_jobs");
+				if (this.#process !== process) return;
+				if (this.#jobs.apply(jobs)) this.#postJobs();
+			} while (this.#jobsStale);
+		} catch (error) {
+			this.log.appendLine(`[warning] get_async_jobs failed: ${errorMessage(error)}`);
+		} finally {
+			this.#jobsReading = false;
+			if (this.#process === process && this.#jobs.running) {
+				this.#jobsTimer = setTimeout(() => void this.#refreshJobs(), JOBS_POLL_MS);
+			}
+		}
 	}
 
 	/**

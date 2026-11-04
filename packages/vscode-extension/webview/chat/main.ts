@@ -211,6 +211,9 @@ function handle(update: ChatUpdate): void {
 		case "scopeCheckpoint":
 			composer.setScopeCheckpointStats(update.stats);
 			break;
+		case "asyncJobs":
+			composer.setAsyncJobs(update.jobs);
+			break;
 		case "commands":
 			composer.setCommands(update.commands);
 			break;

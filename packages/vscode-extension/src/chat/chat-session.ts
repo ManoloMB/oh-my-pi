@@ -508,6 +508,9 @@ export class ChatSession implements vscode.Disposable, HostView {
 			case "sendScopeCheckpoint":
 				await this.#requireHost().sendScopeCheckpoint(request.level);
 				return;
+			case "cancelAsyncJob":
+				await this.#requireHost().cancelAsyncJob(request.id);
+				return;
 			case "watchSubagent":
 				this.#host?.watchSubagent(request.id);
 				return;

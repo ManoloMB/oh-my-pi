@@ -6,6 +6,7 @@
  * recall the prompts sent in the shown chat.
  */
 import type {
+	AsyncJob,
 	AvailableSlashCommand,
 	ChatRequest,
 	ChatUpdate,
@@ -28,6 +29,7 @@ import { openLightbox } from "./lightbox";
 import { ModelPicker } from "./model-picker";
 import { PlanRunPanel } from "./plan-run-panel";
 import { ScopeCheckpointPanel } from "./scope-checkpoint";
+import { AsyncJobsPanel } from "./async-jobs";
 import type { PromptRecall } from "./transcript";
 import { SubagentPanel } from "./subagent-panel";
 
@@ -97,6 +99,7 @@ export class Composer {
 	#stop: HTMLButtonElement;
 	#meter: ContextMeter;
 	#scopeCheckpoint: ScopeCheckpointPanel;
+	#asyncJobs: AsyncJobsPanel;
 	#cleanupOffer: CleanupOffer;
 	#thinkingToggle: HTMLButtonElement;
 	#thinkingExpanded = false;
@@ -151,6 +154,7 @@ export class Composer {
 		this.picker = new ModelPicker(post);
 		this.#meter = new ContextMeter(post);
 		this.#scopeCheckpoint = new ScopeCheckpointPanel(post);
+		this.#asyncJobs = new AsyncJobsPanel(post);
 		this.#cleanupOffer = new CleanupOffer(post);
 		this.#dictation = new DictationControl(post, state => this.#onDictationState(state));
 		this.#ghost = new GhostText(this.#input, post);
@@ -220,6 +224,7 @@ export class Composer {
 						{ className: "composer-footer-right" },
 						this.#meter.element,
 						this.#dictation.element,
+						this.#asyncJobs.element,
 						this.#scopeCheckpoint.element,
 						this.#stop,
 						this.#send,
@@ -253,6 +258,11 @@ export class Composer {
 	/** omp's answer to the scope checkpoint popup's `getScopeCheckpoint`. */
 	setScopeCheckpointStats(stats: ScopeCheckpointStats | null): void {
 		this.#scopeCheckpoint.setStats(stats);
+	}
+
+	/** The chat's background jobs (`asyncJobs`), for the background tasks button. */
+	setAsyncJobs(jobs: AsyncJob[]): void {
+		this.#asyncJobs.setJobs(jobs);
 	}
 
 	setCommands(commands: AvailableSlashCommand[]): void {

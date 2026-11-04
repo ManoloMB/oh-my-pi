@@ -746,6 +746,34 @@ export interface ScopeCheckpointStats {
 	toolCalls: number;
 }
 
+/** Kind of work a background job runs. */
+export type AsyncJobType = "bash" | "task" | "eval";
+
+/** Background job lifecycle. */
+export type AsyncJobStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** One background job of the session. */
+export interface AsyncJob {
+	/** Job id, e.g. `bg_3`. */
+	id: string;
+	type: AsyncJobType;
+	status: AsyncJobStatus;
+	/** What the job does: a bash command's first line, a task's description. */
+	label: string;
+	/** When the job started, in epoch milliseconds. */
+	startTime: number;
+	/** Full command line of a job that runs a process. */
+	command?: string;
+	/** Directory that command started in. */
+	cwd?: string;
+	/** When the job settled, in epoch milliseconds. */
+	endTime?: number;
+	/** Exit status of a settled command. */
+	exitCode?: number;
+	/** Tail of the job's output: progress while running, the result or error once settled. */
+	output?: string;
+}
+
 /** Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran. */
 export type BtwStatus = "running" | "complete" | "cancelled" | "error" | "interrupted";
 
@@ -1701,6 +1729,18 @@ export interface ScopeCheckpointResult {
 	subagents: number;
 }
 
+export interface GetAsyncJobsResult {
+	jobs: AsyncJob[];
+}
+
+export interface CancelAsyncJobParams {
+	jobId: string;
+}
+
+export interface CancelAsyncJobResult {
+	cancelled: boolean;
+}
+
 export interface LiveStartParams {
 	voice?: string;
 	instructions?: string;
@@ -1936,6 +1976,8 @@ export interface RpcWireCommands {
 	hurry_subagents: { params: undefined; result: HurrySubagentsResult };
 	get_scope_checkpoint: { params: undefined; result: ScopeCheckpointStats };
 	scope_checkpoint: { params: ScopeCheckpointParams; result: ScopeCheckpointResult };
+	get_async_jobs: { params: undefined; result: GetAsyncJobsResult };
+	cancel_async_job: { params: CancelAsyncJobParams; result: CancelAsyncJobResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_stop: { params: undefined; result: undefined };
 	live_mute: { params: LiveMuteParams; result: LiveMuteResult };

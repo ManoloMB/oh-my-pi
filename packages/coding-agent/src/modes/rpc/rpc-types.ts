@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { AsyncJob, AsyncJobType } from "../../async/job-manager";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
@@ -66,6 +67,8 @@ export type RpcCommand =
 	| { id?: string; type: "hurry_subagents" }
 	| { id?: string; type: "get_scope_checkpoint" }
 	| { id?: string; type: "scope_checkpoint"; level: ScopeCheckpointLevel }
+	| { id?: string; type: "get_async_jobs" }
+	| { id?: string; type: "cancel_async_job"; jobId: string }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
@@ -393,6 +396,26 @@ export interface RpcSubagentMessagesResult {
 	messages: AgentMessage[];
 }
 
+/** One background job (async bash/task/eval) of the session, as job inspectors show it. */
+export interface RpcAsyncJob {
+	id: string;
+	type: AsyncJobType;
+	status: AsyncJob["status"];
+	/** What the job does: a bash command's first line, a task's description. */
+	label: string;
+	/** Full command line of a job that runs a process. */
+	command?: string;
+	/** Directory that command started in. */
+	cwd?: string;
+	startTime: number;
+	/** When the job settled. */
+	endTime?: number;
+	/** Exit status of a settled command. */
+	exitCode?: number;
+	/** Tail of the job's output: progress while running, the result or error once settled. */
+	output?: string;
+}
+
 // ============================================================================
 // RPC Responses (stdout)
 // ============================================================================
@@ -466,6 +489,8 @@ export type RpcResponse =
 			success: true;
 			data: { queued: boolean; subagents: number };
 	  }
+	| { id?: string; type: "response"; command: "get_async_jobs"; success: true; data: { jobs: RpcAsyncJob[] } }
+	| { id?: string; type: "response"; command: "cancel_async_job"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "set_ask_dialog"; success: true; data: { enabled: boolean } }
 	| {
 			id?: string;

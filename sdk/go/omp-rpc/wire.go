@@ -3319,6 +3319,97 @@ func (v *ScopeCheckpointStats) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+// Kind of work a background job runs.
+type AsyncJobType string
+
+const (
+	AsyncJobTypeBash AsyncJobType = "bash"
+	AsyncJobTypeTask AsyncJobType = "task"
+	AsyncJobTypeEval AsyncJobType = "eval"
+)
+
+func (v *AsyncJobType) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "AsyncJobType")
+	if err != nil {
+		return err
+	}
+	switch value := AsyncJobType(s); value {
+	case AsyncJobTypeBash, AsyncJobTypeTask, AsyncJobTypeEval:
+		*v = value
+		return nil
+	}
+	return unknownValue("AsyncJobType", s)
+}
+
+// Background job lifecycle.
+type AsyncJobStatus string
+
+const (
+	AsyncJobStatusRunning   AsyncJobStatus = "running"
+	AsyncJobStatusCompleted AsyncJobStatus = "completed"
+	AsyncJobStatusFailed    AsyncJobStatus = "failed"
+	AsyncJobStatusCancelled AsyncJobStatus = "cancelled"
+)
+
+func (v *AsyncJobStatus) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "AsyncJobStatus")
+	if err != nil {
+		return err
+	}
+	switch value := AsyncJobStatus(s); value {
+	case AsyncJobStatusRunning, AsyncJobStatusCompleted, AsyncJobStatusFailed, AsyncJobStatusCancelled:
+		*v = value
+		return nil
+	}
+	return unknownValue("AsyncJobStatus", s)
+}
+
+// One background job of the session.
+type AsyncJob struct {
+	// Job id, e.g. `bg_3`.
+	ID     string         `json:"id"`
+	Type   AsyncJobType   `json:"type"`
+	Status AsyncJobStatus `json:"status"`
+	// What the job does: a bash command's first line, a task's description.
+	Label string `json:"label"`
+	// When the job started, in epoch milliseconds.
+	StartTime int64 `json:"startTime"`
+	// Full command line of a job that runs a process.
+	Command *string `json:"command,omitempty"`
+	// Directory that command started in.
+	Cwd *string `json:"cwd,omitempty"`
+	// When the job settled, in epoch milliseconds.
+	EndTime *int64 `json:"endTime,omitempty"`
+	// Exit status of a settled command.
+	ExitCode *int64 `json:"exitCode,omitempty"`
+	// Tail of the job's output: progress while running, the result or error once settled.
+	Output *string `json:"output,omitempty"`
+}
+
+func (v *AsyncJob) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "AsyncJob", v.decodeFrom)
+}
+
+func (v *AsyncJob) decodeFrom(raw map[string]json.RawMessage) error {
+	var out AsyncJob
+	d := fieldDecoder{raw: raw, owner: "AsyncJob"}
+	d.required("id", &out.ID)
+	d.required("type", &out.Type)
+	d.required("status", &out.Status)
+	d.required("label", &out.Label)
+	d.required("startTime", &out.StartTime)
+	d.optional("command", &out.Command)
+	d.optional("cwd", &out.Cwd)
+	d.optional("endTime", &out.EndTime)
+	d.optional("exitCode", &out.ExitCode)
+	d.optional("output", &out.Output)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.
 type BtwStatus string
 
@@ -7356,6 +7447,44 @@ func (v *ScopeCheckpointResult) decodeFrom(raw map[string]json.RawMessage) error
 	return nil
 }
 
+type GetAsyncJobsResult struct {
+	Jobs []AsyncJob `json:"jobs"`
+}
+
+func (v *GetAsyncJobsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetAsyncJobsResult", v.decodeFrom)
+}
+
+func (v *GetAsyncJobsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetAsyncJobsResult
+	d := fieldDecoder{raw: raw, owner: "GetAsyncJobsResult"}
+	d.required("jobs", &out.Jobs)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type CancelAsyncJobResult struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+func (v *CancelAsyncJobResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CancelAsyncJobResult", v.decodeFrom)
+}
+
+func (v *CancelAsyncJobResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CancelAsyncJobResult
+	d := fieldDecoder{raw: raw, owner: "CancelAsyncJobResult"}
+	d.required("cancelled", &out.Cancelled)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type LiveStartResult struct {
 	Voice string `json:"voice"`
 }
@@ -8082,6 +8211,25 @@ func (c Commands) ScopeCheckpoint(ctx context.Context, p ScopeCheckpointCommand)
 	var out ScopeCheckpointResult
 	err := c.call(ctx, "scope_checkpoint", p, 0, &out)
 	return out, err
+}
+
+// GetAsyncJobs sends "get_async_jobs": List the session's background jobs (async bash, task, eval): running first, then the recently settled ones omp still retains.
+func (c Commands) GetAsyncJobs(ctx context.Context) ([]AsyncJob, error) {
+	var out GetAsyncJobsResult
+	err := c.call(ctx, "get_async_jobs", nil, 0, &out)
+	return out.Jobs, err
+}
+
+// CancelAsyncJobCommand holds the parameters of "cancel_async_job".
+type CancelAsyncJobCommand struct {
+	JobID string `json:"jobId"`
+}
+
+// CancelAsyncJob sends "cancel_async_job": Cancel one running background job; false when the session runs none by that id.
+func (c Commands) CancelAsyncJob(ctx context.Context, p CancelAsyncJobCommand) (bool, error) {
+	var out CancelAsyncJobResult
+	err := c.call(ctx, "cancel_async_job", p, 0, &out)
+	return out.Cancelled, err
 }
 
 // LiveStartCommand holds the parameters of "live_start".

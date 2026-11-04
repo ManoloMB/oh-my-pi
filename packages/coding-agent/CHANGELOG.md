@@ -15,6 +15,7 @@
 - Added plan mode to RPC: `set_plan_mode` enters or leaves it, `get_state` reports `planMode` and `planModeAvailable`, and the agent's plan proposal asks the host to approve or refine through a `select` dialog
 - RPC plan approval now marks the `xd://propose` result with `approved` in the plan details (`details.xdev.inner`) and tells the agent to track the plan's steps with `todo`, so hosts can show the execution's progress
 - Added delegate mode: `/delegate [on|off|status]` (TUI and RPC) and the RPC `set_delegate_mode` command steer each prompt to run through `task` subagents, with the agent slicing the work and picking each slice's agent by its nature; `get_state` reports `delegateMode` and `delegateModeAvailable`
+- Added the RPC `get_async_jobs` and `cancel_async_job` commands: hosts can list the session's background jobs (async bash, task, eval) with their status, command, exit code and output tail, and cancel a running one
 - Added RPC `hurry_subagents`: every running subagent gets a hidden wrap-up request at its next step (finish the step in progress, then yield what is done), and the main agent gets a lead variant that integrates instead of launching new waves
 - Subagents now report their soft request budget in progress (`requestBudget`)
 - Added `sessionFile` to `omp skill proposals --json` entries: the session whose task produced each proposal, so hosts can show proposals per session

@@ -3455,6 +3455,82 @@ pub struct ScopeCheckpointStats {
 	pub tool_calls: i64,
 }
 
+/// Kind of work a background job runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AsyncJobType {
+	#[serde(rename = "bash")]
+	Bash,
+	#[serde(rename = "task")]
+	Task,
+	#[serde(rename = "eval")]
+	Eval,
+}
+
+impl AsyncJobType {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Bash => "bash",
+			Self::Task => "task",
+			Self::Eval => "eval",
+		}
+	}
+}
+
+/// Background job lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AsyncJobStatus {
+	#[serde(rename = "running")]
+	Running,
+	#[serde(rename = "completed")]
+	Completed,
+	#[serde(rename = "failed")]
+	Failed,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+}
+
+impl AsyncJobStatus {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::Completed => "completed",
+			Self::Failed => "failed",
+			Self::Cancelled => "cancelled",
+		}
+	}
+}
+
+/// One background job of the session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsyncJob {
+	/// Job id, e.g. `bg_3`.
+	pub id: String,
+	pub r#type: AsyncJobType,
+	pub status: AsyncJobStatus,
+	/// What the job does: a bash command's first line, a task's description.
+	pub label: String,
+	/// When the job started, in epoch milliseconds.
+	#[serde(rename = "startTime")]
+	pub start_time: i64,
+	/// Full command line of a job that runs a process.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub command: Option<String>,
+	/// Directory that command started in.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cwd: Option<String>,
+	/// When the job settled, in epoch milliseconds.
+	#[serde(rename = "endTime", default, skip_serializing_if = "Option::is_none")]
+	pub end_time: Option<i64>,
+	/// Exit status of a settled command.
+	#[serde(rename = "exitCode", default, skip_serializing_if = "Option::is_none")]
+	pub exit_code: Option<i64>,
+	/// Tail of the job's output: progress while running, the result or error once settled.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub output: Option<String>,
+}
+
 /// Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BtwStatus {
@@ -5403,6 +5479,22 @@ pub struct ScopeCheckpointResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetAsyncJobsResult {
+	pub jobs: Vec<AsyncJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelAsyncJobParams {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelAsyncJobResult {
+	pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveStartParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub voice: Option<String>,
@@ -6650,6 +6742,37 @@ impl Command for ScopeCheckpointCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<ScopeCheckpointResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// List the session's background jobs (async bash, task, eval): running first, then the recently settled ones omp still retains.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetAsyncJobsCommand {}
+
+impl Command for GetAsyncJobsCommand {
+	const NAME: &'static str = "get_async_jobs";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = Vec<AsyncJob>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetAsyncJobsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.jobs)
+	}
+}
+
+/// Cancel one running background job; false when the session runs none by that id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelAsyncJobCommand {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+impl Command for CancelAsyncJobCommand {
+	const NAME: &'static str = "cancel_async_job";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = bool;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<CancelAsyncJobResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.cancelled)
 	}
 }
 

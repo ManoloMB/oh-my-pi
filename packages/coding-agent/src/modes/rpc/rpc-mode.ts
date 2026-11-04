@@ -91,6 +91,7 @@ import { isRpcSessionSettled, RpcSessionSettleWatcher, watchedScheduledTurnProbe
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import type {
 	RpcAbortAndRestoreQueueResult,
+	RpcAsyncJob,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -906,6 +907,40 @@ export function handleRpcScopeCheckpoint(
 		}
 	}
 	return { queued, subagents };
+}
+
+/** Settled jobs `get_async_jobs` lists besides the running ones (omp evicts them minutes after they settle). */
+const RPC_ASYNC_JOBS_RECENT_LIMIT = 20;
+/** Characters of each job's output `get_async_jobs` carries: the tail a job inspector shows. */
+const RPC_ASYNC_JOB_OUTPUT_CHARS = 4000;
+
+/**
+ * Handle RPC `get_async_jobs`: the session's background jobs (async bash, task
+ * and eval), running first, then the recently settled ones, each with its
+ * command, exit status and output tail. Empty when the session runs no job manager.
+ */
+export function handleRpcGetAsyncJobs(
+	session: Pick<AgentSession, "getAsyncJobSnapshot" | "inspectAsyncJob">,
+): RpcAsyncJob[] {
+	const snapshot = session.getAsyncJobSnapshot({ recentLimit: RPC_ASYNC_JOBS_RECENT_LIMIT });
+	if (!snapshot) return [];
+	return [...snapshot.running, ...snapshot.recent].map(item => {
+		const inspection = session.inspectAsyncJob(item.id);
+		const output = inspection?.output;
+		return {
+			id: item.id,
+			type: item.type,
+			status: item.status,
+			label: item.label,
+			command: item.command,
+			cwd: inspection?.cwd,
+			startTime: item.startTime,
+			endTime: item.endTime,
+			exitCode: inspection?.exitCode,
+			output:
+				output && output.length > RPC_ASYNC_JOB_OUTPUT_CHARS ? output.slice(-RPC_ASYNC_JOB_OUTPUT_CHARS) : output,
+		};
+	});
 }
 
 export async function handleRpcSessionChange(
@@ -2404,6 +2439,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				}
 				return success(id, "scope_checkpoint", handleRpcScopeCheckpoint(subagentRegistry, session, level));
 			}
+
+			case "get_async_jobs":
+				return success(id, "get_async_jobs", { jobs: handleRpcGetAsyncJobs(session) });
+
+			case "cancel_async_job":
+				return success(id, "cancel_async_job", { cancelled: session.cancelAsyncJob(command.jobId) });
 
 			// =================================================================
 			// Model

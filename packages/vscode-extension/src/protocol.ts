@@ -13,6 +13,7 @@
  */
 import type {
 	AgentMessage,
+	AsyncJob,
 	AvailableSlashCommand,
 	ImageContent,
 	RpcAgentEvent,
@@ -27,6 +28,9 @@ import type {
 export type {
 	AgentMessage,
 	AssistantMessage,
+	AsyncJob,
+	AsyncJobStatus,
+	AsyncJobType,
 	AvailableSlashCommand,
 	BashExecutionMessage,
 	CustomMessage,
@@ -300,7 +304,9 @@ export type ChatUpdate =
 	 */
 	| { type: "subagentRequests"; id: string; requests: SubagentRequestView[]; waiting: boolean; error?: string }
 	/** Answer to `getScopeCheckpoint`: the running request's active time and tool rounds; null when omp could not report them. */
-	| { type: "scopeCheckpoint"; stats: ScopeCheckpointStats | null };
+	| { type: "scopeCheckpoint"; stats: ScopeCheckpointStats | null }
+	/** Background jobs (async bash, task, eval) of the shown session: running first, then those settled during the current task; empty when none. */
+	| { type: "asyncJobs"; jobs: AsyncJob[] };
 
 /** Chat webview → host. */
 export type ChatRequest =
@@ -338,6 +344,8 @@ export type ChatRequest =
 	| { type: "getScopeCheckpoint" }
 	/** Send omp a hidden scope checkpoint at `level` (light, severe, hard); the host reports the outcome as a notice. */
 	| { type: "sendScopeCheckpoint"; level: ScopeCheckpointLevel }
+	/** Cancel one running background job; the host re-sends `asyncJobs`. */
+	| { type: "cancelAsyncJob"; id: string }
 	/** Follow one subagent's requests (`subagentRequests`), or stop with `null`. */
 	| { type: "watchSubagent"; id: string | null }
 	/** Answer a `planReview` with one of its options. */

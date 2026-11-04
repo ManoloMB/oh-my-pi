@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.25.0]
+
+### Added
+
+- A background tasks button in the composer, shown while the chat has background jobs (commands, subagent tasks or eval cells MarIA Code left running), with a badge counting the running ones. Its popup lists each task with what it does, its status, how long it has run and, unfolded, its command and latest output; a running task can be cancelled from there. Finished tasks stay listed until your next request
+
+### Changed
+
+- In the history, the open chat is marked with a blue right arrow instead of a green dot, so it no longer looks like a chat that finished with new messages
+
 ## [0.24.0]
 
 ### Added

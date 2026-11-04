@@ -1769,18 +1769,20 @@ code {
 	min-width: 0;
 }
 
-.history-active-dot {
-	flex: none;
-	width: 6px;
-	height: 6px;
-	border-radius: 9999px;
-	background: var(--omp-accent);
+.history-marker.current {
+	color: var(--vscode-charts-blue, #3794ff);
 }
 
-/* Activity marks: a spinner while the session works, a green dot once it finished unseen. */
+.history-marker.current .icon {
+	width: 12px;
+	height: 12px;
+	flex: none;
+}
+
+/* Activity marks: a spinner while the session works, a green dot once it finished unseen, a blue arrow on the open one. */
 .history-marker {
 	flex: none;
-	width: 10px;
+	width: 12px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -2641,6 +2643,245 @@ code {
 .scope-checkpoint-send:disabled {
 	opacity: 0.35;
 	cursor: default;
+}
+
+/* Background tasks: composer button with a running count, plus its popover */
+
+.async-jobs {
+	position: relative;
+	display: flex;
+}
+
+.async-jobs-toggle {
+	position: relative;
+	width: 28px;
+	height: 28px;
+	border-radius: 9999px;
+}
+
+.async-jobs-toggle.running {
+	color: var(--omp-accent);
+}
+
+.async-jobs-toggle[aria-expanded="true"] {
+	background: var(--c-hover);
+}
+
+.async-jobs-badge {
+	position: absolute;
+	top: 1px;
+	right: 0;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 3px;
+	border-radius: 9999px;
+	background: var(--omp-accent);
+	color: var(--omp-accent-fg);
+	font-size: 9px;
+	font-weight: 600;
+	line-height: 14px;
+	text-align: center;
+	pointer-events: none;
+}
+
+.async-jobs-popover {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 8px);
+	z-index: 10;
+	width: 420px;
+	max-width: calc(100vw - 32px);
+	max-height: 60vh;
+	padding: 12px;
+	border-radius: var(--r-xl);
+	border: 1px solid var(--c-border-heavy);
+	background: var(--menu-bg);
+	box-shadow: var(--menu-shadow);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	font-size: var(--fs-sm);
+	cursor: default;
+}
+
+.async-jobs-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.async-jobs-title {
+	font-size: var(--fs);
+	font-weight: 500;
+}
+
+.async-jobs-summary {
+	flex: 1;
+	color: var(--c-fg-3);
+}
+
+.async-jobs-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.async-job {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: 4px 6px;
+	padding: 6px 8px;
+	border-radius: var(--r-md);
+	background: var(--c-surface);
+}
+
+.async-job-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	min-width: 0;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--c-fg);
+	font-size: var(--fs-sm);
+	text-align: left;
+	cursor: pointer;
+}
+
+.async-job-head .icon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	margin-top: 2px;
+	color: var(--c-fg-3);
+}
+
+.async-job-mark {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin-top: 5px;
+	border-radius: 9999px;
+	background: var(--c-fg-3);
+}
+
+.async-job-mark.running {
+	width: 10px;
+	height: 10px;
+	margin-top: 4px;
+	background: none;
+	border: 1.5px solid color-mix(in srgb, var(--omp-accent) 30%, transparent);
+	border-top-color: var(--omp-accent);
+	animation: history-spin 0.8s linear infinite;
+}
+
+.async-job-mark.completed {
+	background: var(--c-add);
+}
+
+.async-job-mark.failed {
+	background: var(--c-error);
+}
+
+.async-job-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1;
+	min-width: 0;
+}
+
+.async-job-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.async-job-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 8px;
+	color: var(--c-fg-3);
+	font-variant-numeric: tabular-nums;
+}
+
+.async-job-status.running {
+	color: var(--omp-accent);
+}
+
+.async-job-status.completed {
+	color: var(--c-add);
+}
+
+.async-job-status.failed {
+	color: var(--c-error);
+}
+
+.async-job-id {
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.async-job-cancel {
+	height: 22px;
+	padding: 0 10px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: 9999px;
+	background: transparent;
+	color: var(--c-fg);
+	font-size: var(--fs-sm);
+	white-space: nowrap;
+}
+
+.async-job-cancel:hover:not(:disabled) {
+	border-color: var(--c-error);
+	color: var(--c-error);
+}
+
+.async-job-cancel:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.async-job-details {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.async-job-command {
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.async-job-cwd {
+	color: var(--c-fg-3);
+	overflow-wrap: anywhere;
+}
+
+.async-job-output {
+	max-height: 180px;
+	margin: 0;
+	padding: 6px 8px;
+	overflow: auto;
+	border-radius: var(--r-md);
+	background: var(--c-bg);
+	color: var(--c-fg-2);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--fs-code);
+	line-height: 1.4;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.async-jobs-note {
+	margin: 0;
+	color: var(--c-fg-3);
 }
 
 /* Context meter: ring button plus its popover */

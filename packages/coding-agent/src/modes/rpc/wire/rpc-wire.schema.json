@@ -375,6 +375,28 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_async_jobs",
+				"doc": "List the session's background jobs (async bash, task, eval): running first, then the recently settled ones omp still retains.",
+				"params": null,
+				"result": "GetAsyncJobsResult",
+				"nullable": false,
+				"unwrap": "jobs",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cancel_async_job",
+				"doc": "Cancel one running background job; false when the session runs none by that id.",
+				"params": "CancelAsyncJobParams",
+				"result": "CancelAsyncJobResult",
+				"nullable": false,
+				"unwrap": "cancelled",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "live_start",
 				"doc": "Start a live voice session bound to this session; returns the voice in use.",
 				"params": "LiveStartParams",
@@ -3495,6 +3517,76 @@
 				"toolCalls"
 			],
 			"description": "Work done on the current request."
+		},
+		"AsyncJobType": {
+			"enum": [
+				"bash",
+				"task",
+				"eval"
+			],
+			"type": "string",
+			"description": "Kind of work a background job runs."
+		},
+		"AsyncJobStatus": {
+			"enum": [
+				"running",
+				"completed",
+				"failed",
+				"cancelled"
+			],
+			"type": "string",
+			"description": "Background job lifecycle."
+		},
+		"AsyncJob": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Job id, e.g. `bg_3`."
+				},
+				"type": {
+					"$ref": "#/$defs/AsyncJobType"
+				},
+				"status": {
+					"$ref": "#/$defs/AsyncJobStatus"
+				},
+				"label": {
+					"type": "string",
+					"description": "What the job does: a bash command's first line, a task's description."
+				},
+				"startTime": {
+					"type": "integer",
+					"description": "When the job started, in epoch milliseconds."
+				},
+				"command": {
+					"type": "string",
+					"description": "Full command line of a job that runs a process."
+				},
+				"cwd": {
+					"type": "string",
+					"description": "Directory that command started in."
+				},
+				"endTime": {
+					"type": "integer",
+					"description": "When the job settled, in epoch milliseconds."
+				},
+				"exitCode": {
+					"type": "integer",
+					"description": "Exit status of a settled command."
+				},
+				"output": {
+					"type": "string",
+					"description": "Tail of the job's output: progress while running, the result or error once settled."
+				}
+			},
+			"required": [
+				"id",
+				"type",
+				"status",
+				"label",
+				"startTime"
+			],
+			"description": "One background job of the session."
 		},
 		"BtwStatus": {
 			"enum": [
@@ -6633,6 +6725,42 @@
 			"required": [
 				"queued",
 				"subagents"
+			]
+		},
+		"GetAsyncJobsResult": {
+			"type": "object",
+			"properties": {
+				"jobs": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/AsyncJob"
+					}
+				}
+			},
+			"required": [
+				"jobs"
+			]
+		},
+		"CancelAsyncJobParams": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"jobId"
+			]
+		},
+		"CancelAsyncJobResult": {
+			"type": "object",
+			"properties": {
+				"cancelled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"cancelled"
 			]
 		},
 		"LiveStartParams": {

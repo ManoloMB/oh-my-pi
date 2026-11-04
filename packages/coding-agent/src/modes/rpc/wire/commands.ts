@@ -215,6 +215,19 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: { queued: "boolean", subagents: "number.integer" },
 	},
 	{
+		name: "get_async_jobs",
+		doc: "List the session's background jobs (async bash, task, eval): running first, then the recently settled ones omp still retains.",
+		result: { jobs: "AsyncJob[]" },
+		unwrap: "jobs",
+	},
+	{
+		name: "cancel_async_job",
+		doc: "Cancel one running background job; false when the session runs none by that id.",
+		params: { jobId: "string" },
+		result: { cancelled: "boolean" },
+		unwrap: "cancelled",
+	},
+	{
 		name: "live_start",
 		doc: "Start a live voice session bound to this session; returns the voice in use.",
 		params: { "voice?": "string", "instructions?": "string" },
