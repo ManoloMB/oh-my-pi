@@ -10,6 +10,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type EditStore, type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
@@ -58,7 +59,7 @@ import { toolResult } from "./tool-result";
 import { cfgGrepContextAfter, cfgGrepContextBefore } from "./settings";
 import { cfgTaskDisabledAgents } from "../task/settings";
 
-const searchSchema = type({
+export const searchSchema = type({
 	pattern: type("string"),
 	"path?": "string",
 	"case?": "boolean",
@@ -67,6 +68,21 @@ const searchSchema = type({
 });
 
 export type GrepToolInput = typeof searchSchema.infer;
+
+export const GREP_EXAMPLES = [
+	{
+		caption: "Several roots in one call: `;`-separated path",
+		call: { pattern: "retryPolicy", path: "packages/ai/src;packages/agent/src" },
+	},
+	{
+		caption: "Case-insensitive search inside one file's line range",
+		call: { pattern: "timeout", path: "src/server.ts:200-400", case: false },
+	},
+	{
+		caption: "Include gitignored files such as logs",
+		call: { pattern: "ERROR", path: "logs/*.log", gitignore: false },
+	},
+] satisfies readonly ToolExample<GrepToolInput>[];
 
 /** Maximum number of distinct files surfaced in a single response. The
  * agent paginates further pages via `skip`. */
@@ -450,6 +466,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 	}
 	readonly parameters = searchSchema;
 	readonly strict = true;
+	readonly examples = GREP_EXAMPLES;
 
 	readonly #contextBeforeOverride?: number;
 	readonly #contextAfterOverride?: number;

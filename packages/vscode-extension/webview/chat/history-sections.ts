@@ -16,8 +16,8 @@ export const SECTIONS: readonly { id: SectionId; title: string }[] = [
 	{ id: "older", title: "Older" },
 ];
 
-/** Sections folded on every opening (its count still shows on the heading); the others start unfolded. */
-export const FOLDED_BY_DEFAULT: readonly SectionId[] = ["week", "older"];
+/** Sections folded on every opening (its count still shows on the heading): all but Today; Running never folds. */
+export const FOLDED_BY_DEFAULT: readonly SectionId[] = ["yesterday", "week", "older"];
 
 /** Local midnight `daysBack` days before the day of `now` (calendar days, so DST shifts don't move it). */
 function dayStart(now: number, daysBack: number): number {
@@ -58,6 +58,17 @@ export function compactAge(modified: number, now: number): string {
 		day: "numeric",
 		year: sameYear ? undefined : "numeric",
 	});
+}
+
+/** How long a chat ran, from its start to its last change: "<1m", "45m", "2h 15m", "3d 4h". */
+export function durationLabel(created: number, modified: number): string {
+	const minutes = Math.floor(Math.max(0, modified - created) / 60_000);
+	if (minutes < 1) return "<1m";
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+	const days = Math.floor(hours / 24);
+	return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
 
 /**

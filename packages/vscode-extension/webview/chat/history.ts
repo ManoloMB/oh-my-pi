@@ -3,9 +3,11 @@
  * filtered by two tabs: the workspace's sessions or the chats without a
  * workspace (it opens on the open chat's group). Chats are grouped under sticky
  * headings (see history-sections.ts): those running, then Today, Yesterday, This
- * week and Older; every section but Running folds, This week and Older start
- * folded, and a search unfolds everything.
- * Each row shows the chat's name, its age and its latest prompt. Opening it asks
+ * week and Older; every section but Running folds, only Today starts unfolded,
+ * and a search unfolds everything.
+ * Today's chats show as portrait cards that flip on hover to more detail; the
+ * other sections, and every section while searching, show rows with the chat's
+ * name, its age and its latest prompt. Opening it asks
  * the host for `listSessions`; picking a row posts `openSession`, its pencil
  * renames it in place (`renameSession`), its trash deletes it after the host's
  * confirmation (`deleteSession`). Sessions working in the window show a spinner,
@@ -17,7 +19,15 @@ import { foldText, parseQuery, termRanges } from "../../src/search-text";
 import { h, iconButton } from "../dom";
 import { icon } from "../icons";
 import { setTooltip } from "../tooltip";
-import { compactAge, FOLDED_BY_DEFAULT, previewOf, SECTIONS, type SectionId, sectionOf } from "./history-sections";
+import {
+	compactAge,
+	durationLabel,
+	FOLDED_BY_DEFAULT,
+	previewOf,
+	SECTIONS,
+	type SectionId,
+	sectionOf,
+} from "./history-sections";
 import { SearchHelp } from "./history-search-help";
 
 type Post = (request: ChatRequest) => void;
@@ -69,6 +79,19 @@ export class HistoryPanel {
 	/** Query `#hits` answers; undefined before the first answer of this opening. */
 	#hitsQuery: string | undefined;
 	#searchTimer = 0;
+	/**
+	 * Marks a card's prompt body `clipped` when its whole text does not fit the
+	 * room it has; CSS then shows the prompt's start, "…", and its end. Runs again
+	 * whenever the room changes (the card growing, widening, its type shrinking).
+	 */
+	#promptFit = new ResizeObserver(entries => {
+		for (const { target } of entries) {
+			const head = target.firstElementChild;
+			if (!(head instanceof HTMLElement)) continue;
+			target.classList.remove("clipped");
+			target.classList.toggle("clipped", head.offsetHeight > target.clientHeight + 1);
+		}
+	});
 	/** The "i" beside the search box; its examples search when clicked. */
 	#help = new SearchHelp(query => {
 		this.#search.value = query;
@@ -168,11 +191,8 @@ export class HistoryPanel {
 				(active
 					? active.noWorkspace
 					: !items.some(item => !item.noWorkspace) && items.some(item => item.noWorkspace));
-			if (active && active.noWorkspace === this.#noWorkspace) {
-				// The open chat stays reachable when its section starts folded.
-				this.#folded.delete(sectionOf(active, Date.now()));
-				this.#selectedPath = active.path;
-			}
+			// Selected even when its section starts folded: only Today opens unfolded.
+			if (active && active.noWorkspace === this.#noWorkspace) this.#selectedPath = active.path;
 		}
 		this.#render();
 	}
@@ -221,6 +241,8 @@ export class HistoryPanel {
 	}
 
 	#render(): void {
+		// The cards built below replace the observed ones.
+		this.#promptFit.disconnect();
 		if (this.#sessions === undefined) {
 			this.#matches = [];
 			this.#renderTabs(undefined);
@@ -270,11 +292,18 @@ export class HistoryPanel {
 			const folded = !searching && this.#folded.has(id);
 			children.push(this.#heading(id, title, items.length, searching ? undefined : folded));
 			if (folded) continue;
+			// Today's few chats read as cards; a search keeps rows, whose snippets show where it matched.
+			const cards = id === "today" && !searching ? h("div", { className: "history-cards" }) : undefined;
+			if (cards) {
+				cards.addEventListener("mouseleave", () => widenColumn(cards, undefined));
+				children.push(cards);
+			}
 			for (const item of items) {
 				this.#matches.push(item);
-				const row = this.#row(item, now, terms, hits?.get(item.path));
+				const row = cards ? this.#card(item, now) : this.#row(item, now, terms, hits?.get(item.path));
 				rows.push(row);
-				children.push(row);
+				if (cards) cards.append(row);
+				else children.push(row);
 			}
 		}
 		if (pending) children.push(h("div", { className: "history-empty" }, "Searching all messages…"));
@@ -331,11 +360,8 @@ export class HistoryPanel {
 		}
 	}
 
-	#row(item: SessionListItem, now: number, terms: readonly string[], hit: SessionSearchHit | undefined): HTMLElement {
-		const editing = item.path === this.#editing;
-		const label = editing
-			? this.#renameInput(item)
-			: h("span", { className: "history-label" }, ...highlight(item.label, terms));
+	/** Rename pencil and delete trash of a chat (row or card). */
+	#actions(item: SessionListItem): [HTMLButtonElement, HTMLButtonElement] {
 		const rename = iconButton("pencil", "Rename", event => {
 			event.stopPropagation();
 			this.#editing = item.path;
@@ -348,16 +374,54 @@ export class HistoryPanel {
 		});
 		rename.classList.add("history-row-button");
 		remove.classList.add("history-row-button");
-		const age = h("span", { className: "history-age" }, compactAge(item.modified, now));
-		setTooltip(age, new Date(item.modified).toLocaleString());
-		const classes = ["history-row"];
+		return [rename, remove];
+	}
+
+	/** Pill counting the skill proposals this chat's tasks produced; null without any. */
+	#curation(item: SessionListItem): HTMLElement | null {
+		if (item.proposals === 0) return null;
+		return h(
+			"span",
+			{
+				className: "history-curation",
+				dataset: { tooltip: `${item.proposals} skill change${item.proposals === 1 ? "" : "s"} proposed` },
+			},
+			icon("pencil"),
+			String(item.proposals),
+		);
+	}
+
+	/** Row or card classes shared by both shapes: open chat, finished unseen, being renamed. */
+	#stateClasses(base: string, item: SessionListItem, editing: boolean): string {
+		const classes = [base];
 		if (item.active) classes.push("active");
 		if (item.activity === "done") classes.push("unread");
 		if (editing) classes.push("editing");
+		return classes.join(" ");
+	}
+
+	/** Clicking opens the chat; focus stays in the search box except inside the rename field. */
+	#wireOpen(element: HTMLElement, item: SessionListItem, editing: boolean): void {
+		element.addEventListener("mousedown", event => {
+			if (!(event.target as Element).closest(".history-rename")) event.preventDefault();
+		});
+		element.addEventListener("click", () => {
+			if (!editing) this.#open(item);
+		});
+	}
+
+	#row(item: SessionListItem, now: number, terms: readonly string[], hit: SessionSearchHit | undefined): HTMLElement {
+		const editing = item.path === this.#editing;
+		const label = editing
+			? this.#renameInput(item)
+			: h("span", { className: "history-label" }, ...highlight(item.label, terms));
+		const [rename, remove] = this.#actions(item);
+		const age = h("span", { className: "history-age" }, compactAge(item.modified, now));
+		setTooltip(age, new Date(item.modified).toLocaleString());
 		const row = h(
 			"div",
 			{
-				className: classes.join(" "),
+				className: this.#stateClasses("history-row", item, editing),
 				role: "option",
 				ariaSelected: "false",
 				dataset: { tooltip: item.active ? `Current chat · ${item.path}` : item.path },
@@ -367,33 +431,109 @@ export class HistoryPanel {
 				{ className: "history-line" },
 				this.#marker(item),
 				label,
-				editing || item.proposals === 0
-					? null
-					: h(
-							"span",
-							{
-								className: "history-curation",
-								dataset: {
-									tooltip: `${item.proposals} skill change${item.proposals === 1 ? "" : "s"} proposed`,
-								},
-							},
-							icon("pencil"),
-							String(item.proposals),
-						),
+				editing ? null : this.#curation(item),
 				editing ? null : age,
 				editing ? null : rename,
 				editing ? null : remove,
 			),
 			editing ? null : this.#preview(item, terms, hit),
 		);
-		// Keep focus in the search box, except when clicking into the rename field.
-		row.addEventListener("mousedown", event => {
-			if (!(event.target as Element).closest(".history-rename")) event.preventDefault();
-		});
-		row.addEventListener("click", () => {
-			if (!editing) this.#open(item);
-		});
+		this.#wireOpen(row, item, editing);
 		return row;
+	}
+
+	/**
+	 * Today's chat as a portrait card. The front tells chats apart at a glance:
+	 * state, age, name and where it was left. Hovering flips it to the back: when
+	 * it started, how long it ran, its size, its first and latest prompts, and
+	 * the rename and delete buttons. Renaming keeps the front in view.
+	 */
+	#card(item: SessionListItem, now: number): HTMLElement {
+		const editing = item.path === this.#editing;
+		const [rename, remove] = this.#actions(item);
+		const messages =
+			item.messages === undefined
+				? undefined
+				: `${item.messages}${item.messagesPartial ? "+" : ""} message${item.messages === 1 && !item.messagesPartial ? "" : "s"}`;
+		const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+		// The latest prompt is where the chat was left; with a single prompt that is the first one.
+		const last = item.lastPromptFull ?? item.lastPrompt ?? item.firstPromptFull ?? item.firstPrompt;
+		const front = h(
+			"div",
+			{ className: "history-card-face history-card-front" },
+			h(
+				"div",
+				{ className: "history-card-top" },
+				this.#marker(item),
+				h("span", { className: "history-card-age" }, compactAge(item.modified, now)),
+				item.active ? h("span", { className: "history-card-badge" }, "Open") : null,
+			),
+			editing ? this.#renameInput(item) : h("div", { className: "history-card-title" }, item.label),
+			last && last !== item.label
+				? h(
+						"div",
+						{ className: "history-card-preview" },
+						h("div", { className: "history-card-prompt-label" }, "Last user message"),
+						h("div", { className: "history-card-preview-text" }, last),
+					)
+				: null,
+			h(
+				"div",
+				{ className: "history-card-foot" },
+				messages ? h("span", null, messages) : null,
+				this.#curation(item),
+			),
+		);
+		const fact = (label: string, value: string) =>
+			h("div", { className: "history-card-fact" }, h("dt", null, label), h("dd", null, value));
+		// The whole prompt when it fits; otherwise CSS shows its start, "…", and its end (see #promptFit).
+		const prompt = (label: string, text: string | undefined) => {
+			if (!text) return null;
+			const body = h(
+				"div",
+				{ className: "history-card-prompt-body" },
+				h("span", { className: "history-card-prompt-head" }, text),
+				h("span", { className: "history-card-prompt-tail" }, h("span", null, text)),
+			);
+			this.#promptFit.observe(body);
+			return h(
+				"div",
+				{ className: "history-card-prompt" },
+				h("div", { className: "history-card-prompt-label" }, label),
+				body,
+			);
+		};
+		const back = h(
+			"div",
+			{ className: "history-card-face history-card-back" },
+			h(
+				"dl",
+				{ className: "history-card-facts" },
+				item.created === undefined ? null : fact("Started", time(item.created)),
+				fact("Last change", time(item.modified)),
+				item.created === undefined ? null : fact("Ran for", durationLabel(item.created, item.modified)),
+				messages ? fact("Size", messages) : null,
+			),
+			prompt("First user message", item.firstPromptFull ?? item.firstPrompt),
+			prompt("Last user message", item.lastPromptFull ?? item.lastPrompt),
+			h("div", { className: "history-card-actions" }, rename, remove),
+		);
+		const card = h(
+			"div",
+			{
+				className: this.#stateClasses("history-card", item, editing),
+				role: "option",
+				ariaSelected: "false",
+				ariaLabel: item.label,
+				dataset: { tooltip: item.active ? `Current chat · ${item.path}` : item.path },
+			},
+			h("div", { className: "history-card-inner" }, front, back),
+		);
+		this.#wireOpen(card, item, editing);
+		card.addEventListener("mouseenter", () => {
+			if (!editing && card.parentElement) widenColumn(card.parentElement, card);
+		});
+		return card;
 	}
 
 	/** Inline name editor: Enter renames, Escape or leaving the field cancels. */
@@ -515,6 +655,49 @@ export class HistoryPanel {
 				return;
 		}
 	}
+}
+
+/** Share of the row a hovered card's column takes, by column count; the other columns split the rest. */
+const WIDE_COLUMN_FR: Record<number, number> = { 2: 1.4 };
+const WIDE_COLUMN_FR_DEFAULT = 1.6;
+/** A little past the CSS transition of `grid-template-columns`, so the equal tracks have settled. */
+const UNWIDEN_SETTLE_MS = 950;
+/** Pending return of a card grid to its own auto-fill columns. */
+const unwidenTimers = new WeakMap<HTMLElement, number>();
+
+/**
+ * Widen the column of `card` in Today's card grid and narrow the others, or
+ * (`card` undefined) bring them back to equal widths. Grid tracks only animate
+ * between lists of the same length, so the auto-fill columns are first spelled
+ * out as the explicit equal tracks the width gives, which looks the same; once
+ * they are equal again the inline tracks go, so a resize re-flows the columns.
+ */
+function widenColumn(cards: HTMLElement, card: HTMLElement | undefined): void {
+	window.clearTimeout(unwidenTimers.get(cards));
+	const count = getComputedStyle(cards).gridTemplateColumns.split(" ").filter(Boolean).length;
+	if (count < 2) return;
+	const equal = Array.from({ length: count }, () => "minmax(0, 1fr)").join(" ");
+	if (!card) {
+		if (!cards.style.gridTemplateColumns) return;
+		cards.style.gridTemplateColumns = equal;
+		unwidenTimers.set(
+			cards,
+			window.setTimeout(() => cards.style.removeProperty("grid-template-columns"), UNWIDEN_SETTLE_MS),
+		);
+		return;
+	}
+	if (!cards.style.gridTemplateColumns) {
+		cards.style.gridTemplateColumns = equal;
+		// Commit the equal tracks before changing them, so the change animates.
+		void cards.offsetWidth;
+	}
+	const column = Array.prototype.indexOf.call(cards.children, card) % count;
+	const wide = WIDE_COLUMN_FR[count] ?? WIDE_COLUMN_FR_DEFAULT;
+	const narrow = (count - wide) / (count - 1);
+	cards.style.gridTemplateColumns = Array.from(
+		{ length: count },
+		(_, index) => `minmax(0, ${index === column ? wide : narrow}fr)`,
+	).join(" ");
 }
 
 /** `text` with the folded occurrences of `terms` (see search-text.ts) wrapped in `<mark>`. */

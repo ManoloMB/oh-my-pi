@@ -7,6 +7,7 @@
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { FindToolDetails } from "@oh-my-pi/pi-tui/tools/find";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { formatBytes, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
@@ -23,13 +24,28 @@ import { resolveSearchRoot } from "./tree";
 
 import { cfgFindEnabled } from "../settings";
 
-const findSchema = type({
+export const findSchema = type({
 	query: "string",
 	grep_keywords: "string[]",
 	"path?": "string",
 });
 
 export type FindToolInput = typeof findSchema.infer;
+
+export const FIND_EXAMPLES = [
+	{
+		caption: "Behavior question scoped to one subsystem",
+		call: {
+			query: "where expired session tokens are refreshed before a request",
+			grep_keywords: ["refresh", "expires"],
+			path: "packages/ai/src",
+		},
+	},
+	{
+		caption: "Unsure of exact terms: empty keyword list",
+		call: { query: "retry with exponential backoff for failed uploads", grep_keywords: [] },
+	},
+] satisfies readonly ToolExample<FindToolInput>[];
 
 /** Line ranges shown per hit in the model-facing text, strongest first. */
 const RANGES_SHOWN = 3;
@@ -59,6 +75,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly description = findDescription;
 	readonly parameters = findSchema;
 	readonly strict = true;
+	readonly examples = FIND_EXAMPLES;
 
 	constructor(private readonly session: ToolSession) {}
 

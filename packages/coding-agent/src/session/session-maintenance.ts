@@ -14,6 +14,7 @@ import {
 	AGGRESSIVE_SHAKE_CONFIG,
 	AUTO_HANDOFF_THRESHOLD_FOCUS,
 	applyShakeRegions,
+	buildCompactionFidelity,
 	CompactionCancelledError,
 	type CompactionDetails,
 	type CompactionPreparation,
@@ -41,6 +42,7 @@ import {
 	type SummaryOptions,
 	shouldCompact,
 	shouldUseProviderNativeCompaction,
+	upsertCompactionFidelity,
 	upsertFileOperations,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
@@ -108,6 +110,7 @@ import type { CompactionEntry, SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { resolveSpeculationLeadTokens, SPECULATION_LEAD_MIN_TOKENS } from "./speculation-lead";
+import compactionRecoveryPointerPrompt from "../prompts/system/compaction-recovery-pointer.md" with { type: "text" };
 import experimentalContextNotesReminderPrompt from "../prompts/system/experimental-context-notes-reminder.md" with { type: "text" };
 import experimentalContextRolloverPrompt from "../prompts/system/experimental-context-rollover.md" with { type: "text" };
 import lengthStopRetryTemplate from "../prompts/system/length-stop-retry.md" with { type: "text" };
@@ -378,15 +381,26 @@ function mergeLlmCompactionPreserveData(
 	return snapcompact.stripPreservedArchive(Object.keys(preserveData).length > 0 ? preserveData : undefined);
 }
 
-/** Wrap a handoff document as a compaction summary: append the cumulative file-operations tag and derive entry details. */
+/** Points compacted sessions at their own uncompacted branch (`history://current/full`). */
+const COMPACTION_RECOVERY_POINTER = compactionRecoveryPointerPrompt.trim();
+
+/** Wrap a handoff document as a compaction summary: append the cumulative file-operations and fidelity blocks and derive entry details. */
 function handoffSummaryFromDocument(
 	document: string,
 	preparation: CompactionPreparation,
 ): { summary: string; details: CompactionDetails } {
 	const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+	const fidelity = buildCompactionFidelity(
+		[...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+		preparation.previousDetails,
+	);
 	return {
-		summary: upsertFileOperations(document, readFiles, modifiedFiles, preparation.fileOps.read),
-		details: { readFiles, modifiedFiles },
+		summary: upsertCompactionFidelity(
+			upsertFileOperations(document, readFiles, modifiedFiles, preparation.fileOps.read),
+			fidelity,
+			COMPACTION_RECOVERY_POINTER,
+		),
+		details: { readFiles, modifiedFiles, ...fidelity },
 	};
 }
 
@@ -3503,6 +3517,7 @@ export class SessionMaintenance {
 						buildProviderContext: (summarized, retained, signal) =>
 							this.#host.buildLiveProviderContext(summarized, retained, signal),
 						isUserAuthored: isUserAuthoredMessage,
+						recoveryPointer: COMPACTION_RECOVERY_POINTER,
 						telemetry,
 						// Honor the user's /model thinking selection (incl. `off`) on
 						// the manual `/compact` path. Clamped per-model inside compact()
@@ -5074,6 +5089,7 @@ export class SessionMaintenance {
 									buildProviderContext: (summarized, retained, signal) =>
 										this.#host.buildLiveProviderContext(summarized, retained, signal),
 									isUserAuthored: isUserAuthoredMessage,
+									recoveryPointer: COMPACTION_RECOVERY_POINTER,
 									telemetry,
 									// Honor the user's /model thinking selection on the
 									// auto-compaction path — the most-fired compaction

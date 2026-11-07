@@ -57,6 +57,9 @@
 - Reduced interactive startup memory usage for new sessions by initializing syntax highlighting only when needed; resumed sessions still prepare highlighting in the background so the restored transcript paints without delay ([#15299](https://github.com/can1357/oh-my-pi/pull/15299) by [@iliaal](https://github.com/iliaal))
 - Compacted Read directory listings by replacing alignment padding with single-space separators while retaining file sizes and relative modification times ([#9062](https://github.com/can1357/oh-my-pi/pull/9062) by [@MikeeI](https://github.com/MikeeI), [#15352](https://github.com/can1357/oh-my-pi/pull/15352) by [@iliaal](https://github.com/iliaal)).
 - RPC mode now emits `session_info_update` whenever the session title changes (auto-titling, `set_session_name`), not only after builtin slash commands
+- Compaction summaries (handoff and soft) now end with three blocks built from the summarized history rather than written by the model: exact identifiers taken from full, untruncated tool output (error lines, commit/container hashes, issue and ticket refs, URLs), your own messages quoted verbatim, and a pointer to `history://current/full`; all three carry over to later compactions within fixed budgets
+- `history://current/full` (this session's whole uncompacted branch, readable with `read` and `grep`) now works in every session that owns its branch, not only with `compaction.experimentalContextManagement`
+- The `edit` tool in `replace` mode and the `grep`, `find` and `bash` tools now carry worked call examples in their descriptions
 ### Fixed
 
 - Fixed the system prompt claiming user content is sanitized: instructions found in tool output, web pages, fetched documents, MCP results and ordinary files are now treated as data, never obeyed

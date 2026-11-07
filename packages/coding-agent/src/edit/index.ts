@@ -97,7 +97,26 @@ type TInput =
 
 type EditParams = ReplaceParams | ReplaceBatchParams | PatchParams | HashlineParams | ApplyPatchParams | SloppyParams;
 
-const PATCH_EXAMPLES = [
+export const REPLACE_EXAMPLES = [
+	{
+		caption: "Smallest unique anchor; keep the file's exact indentation",
+		call: {
+			path: "src/config.ts",
+			old_string: "  timeoutMs: 5000,\n  retries: 3,",
+			new_string: "  timeoutMs: 10000,\n  retries: 3,",
+		},
+	},
+	{
+		caption: "Rename every occurrence in one file",
+		call: { path: "src/client.ts", old_string: "fetchUser", new_string: "loadUser", replace_all: true },
+	},
+	{
+		caption: "Delete a line: empty new_string",
+		call: { path: "src/legacy.ts", old_string: 'import { oldHelper } from "./old-helper";\n', new_string: "" },
+	},
+] satisfies readonly ToolExample<ReplaceParams>[];
+
+export const PATCH_EXAMPLES = [
 	{
 		caption: "Create",
 		call: { path: "hello.txt", edits: [{ op: "create", diff: "Hello\n" }] },
@@ -126,7 +145,7 @@ const PATCH_EXAMPLES = [
 	},
 ] satisfies readonly ToolExample<PatchParams>[];
 
-const APPLY_PATCH_EXAMPLES = [
+export const APPLY_PATCH_EXAMPLES = [
 	{
 		caption: "Apply a combined patch file",
 		call: {
@@ -362,6 +381,7 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	get examples(): readonly ToolExample[] | undefined {
+		if (this.mode === "replace") return REPLACE_EXAMPLES;
 		if (this.mode === "patch") return PATCH_EXAMPLES;
 		if (this.mode === "apply_patch") return APPLY_PATCH_EXAMPLES;
 		return undefined;

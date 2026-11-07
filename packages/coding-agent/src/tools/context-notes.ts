@@ -41,14 +41,22 @@ export interface NewContextToolDetails {
 
 type ExperimentalContextSessionManager = NonNullable<ToolSession["sessionManager"]>;
 
-function resolveExperimentalContextSession(session: ToolSession): ExperimentalContextSessionManager | undefined {
-	if (cfgCompactionExperimentalContextManagement.get(session.settings) !== true || session.isDisposed?.()) {
-		return undefined;
-	}
+/**
+ * The live session journal, only when this ToolSession owns it. The identity comparison
+ * prevents advisor tools from writing the parent agent's notebook or resolving its raw history.
+ */
+export function resolveOwnedSessionManager(session: ToolSession): ExperimentalContextSessionManager | undefined {
+	if (session.isDisposed?.()) return undefined;
 	const manager = session.sessionManager;
 	const ownerId = session.getSessionId?.();
 	if (!manager || !ownerId || manager.getSessionId?.() !== ownerId) return undefined;
 	return manager;
+}
+
+function resolveExperimentalContextSession(session: ToolSession): ExperimentalContextSessionManager | undefined {
+	return cfgCompactionExperimentalContextManagement.get(session.settings) === true
+		? resolveOwnedSessionManager(session)
+		: undefined;
 }
 
 /**

@@ -14,7 +14,7 @@ import type {
 	ToolApprovalDecision,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { isPosixShell } from "@oh-my-pi/pi-utils/procmgr";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
@@ -325,7 +325,7 @@ async function saveBashOriginalArtifact(session: ToolSession, originalText: stri
 
 const BASH_TIMEOUT_DESCRIPTION = `timeout in seconds; 0 disables the command deadline; nonzero values are clamped to ${TOOL_TIMEOUTS.bash.min}-${TOOL_TIMEOUTS.bash.max}`;
 
-const bashSchemaBase = type({
+export const bashSchemaBase = type({
 	command: type("string"),
 	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
 	"cwd?": "string",
@@ -384,6 +384,17 @@ export interface BashToolInput {
 	async?: boolean;
 	pty?: boolean;
 }
+
+export const BASH_EXAMPLES = [
+	{
+		caption: "Run in another directory with `cwd`, never `cd`",
+		call: { command: "bun test test/compaction.test.ts", cwd: "packages/agent" },
+	},
+	{
+		caption: "Slow command: explicit timeout in seconds",
+		call: { command: "kubectl rollout status deployment/api -n payments", timeout: 300 },
+	},
+] satisfies readonly ToolExample<BashToolInput>[];
 
 /**
  * Treats a blank string as an unset field.
@@ -497,6 +508,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly name = "bash";
 	/** Bash reads `skill://` paths through its shell filesystem, including as a working directory. */
 	readonly readsSkillUris = true;
+	readonly examples = BASH_EXAMPLES;
 	readonly approval = (args: unknown): ToolApprovalDecision => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "";

@@ -18,9 +18,16 @@ async function tempDir(): Promise<string> {
 }
 
 /** A session file as omp writes it: fixed-width title slot, header, then entries. */
-function sessionFile(options: { title?: string; id: string; prompts: string[]; padding?: number }): string {
+function sessionFile(options: {
+	title?: string;
+	id: string;
+	prompts: string[];
+	padding?: number;
+	timestamp?: string;
+}): string {
 	const slot = JSON.stringify({ type: "title", v: 1, title: options.title ?? "", updatedAt: "x", pad: "" });
-	const lines = [slot, JSON.stringify({ type: "session", version: 3, id: options.id, cwd: "/w" })];
+	const header = { type: "session", version: 3, id: options.id, cwd: "/w", timestamp: options.timestamp };
+	const lines = [slot, JSON.stringify(header)];
 	for (const prompt of options.prompts) {
 		lines.push(
 			JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: prompt }] } }),
@@ -51,6 +58,20 @@ describe("listSessions", () => {
 		expect(sessions.map(session => session.id)).toEqual(["b", "a"]);
 		expect(sessions.map(sessionLabel)).toEqual(["Named session", "first line"]);
 		expect(sessions[1]).toMatchObject({ messageCount: 4, truncated: false });
+	});
+
+	it("reads when the session started from its header, and leaves it unset when the header has none", async () => {
+		const dir = await tempDir();
+		await fs.writeFile(
+			path.join(dir, "2026-01-01_t.jsonl"),
+			sessionFile({ id: "t", prompts: ["hi"], timestamp: "2026-01-01T09:30:00.000Z" }),
+		);
+		await fs.writeFile(path.join(dir, "2026-01-01_u.jsonl"), sessionFile({ id: "u", prompts: ["hi"] }));
+
+		const byId = Object.fromEntries((await listSessions(dir)).map(session => [session.id, session]));
+
+		expect(byId.t?.created?.toISOString()).toBe("2026-01-01T09:30:00.000Z");
+		expect(byId.u?.created).toBeUndefined();
 	});
 
 	it("lists a reply to selected text by what the user wrote, not its wrapper", async () => {
@@ -94,6 +115,26 @@ describe("listSessions", () => {
 		});
 		expect(byId.b).toMatchObject({ firstMessage: "same text", lastMessage: "same text", singlePrompt: true });
 		expect(byId.c).toMatchObject({ firstMessage: "again", lastMessage: "again", singlePrompt: false });
+	});
+
+	it("keeps whole prompts on one line, cutting only the middle of a very long one", async () => {
+		const dir = await tempDir();
+		const long = `start ${"x".repeat(2000)} end`;
+		await fs.writeFile(
+			path.join(dir, "2026-01-01_f.jsonl"),
+			sessionFile({ id: "f", prompts: ["fix the login\n  and the logout", long] }),
+		);
+
+		const [session] = await listSessions(dir);
+
+		expect(session).toMatchObject({
+			firstMessage: "fix the login",
+			firstMessageFull: "fix the login and the logout",
+		});
+		expect(session?.lastMessageFull).toStartWith("start x");
+		expect(session?.lastMessageFull).toEndWith("x end");
+		expect(session?.lastMessageFull).toContain(" … ");
+		expect(session?.lastMessageFull?.length).toBe(1200 + " … ".length);
 	});
 
 	it("finds the latest prompt near the end of a long session, past long tool output", async () => {

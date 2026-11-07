@@ -20,14 +20,32 @@ export interface SessionSummary {
 	firstMessage?: string;
 	/** First line of the latest user prompt; absent when it could not be found near the end of a huge file. */
 	lastMessage?: string;
+	/** The whole first prompt on one line, its middle cut when very long (see {@link PROMPT_FULL_MAX_CHARS}). */
+	firstMessageFull?: string;
+	/** The whole latest prompt, the same way. */
+	lastMessageFull?: string;
 	/** The first prompt is also the latest one: the session has a single prompt. */
 	singlePrompt: boolean;
 	modified: Date;
+	/** When the session started (its header's timestamp); absent for a file without a readable header. */
+	created?: Date;
 	/** User + assistant messages found in the scanned prefix; a lower bound for long sessions. */
 	messageCount: number;
 	/** The prefix ended before the file did, so `messageCount` is partial. */
 	truncated: boolean;
 }
+
+/** A prompt the user sent: its first line (for one-line previews) and all of it (for the history cards). */
+interface Prompt {
+	text: string;
+	full: string;
+}
+
+/** A prompt and the byte offset of its line, which tells prompts apart. */
+type PromptAt = Prompt & { offset: number };
+
+/** Longest whole prompt kept; a longer one keeps its start and its end, so a card can show both. */
+const PROMPT_FULL_MAX_CHARS = 1200;
 
 /** Bytes read from each file: covers the title, header, and first prompts of nearly every session. */
 const SCAN_BYTES = 64 * 1024;
@@ -96,7 +114,7 @@ async function readSummary(file: string): Promise<SessionSummary> {
 		};
 		// Prompts are told apart by the byte offset of their line.
 		let firstOffset: number | undefined;
-		let last: { offset: number; text: string } | undefined;
+		let last: PromptAt | undefined;
 		let offset = 0;
 		for (const line of lines) {
 			const lineOffset = offset;
@@ -112,6 +130,8 @@ async function readSummary(file: string): Promise<SessionSummary> {
 				if (entry.title?.trim()) summary.title = entry.title.trim();
 			} else if (entry.type === "session") {
 				if (entry.id) summary.id = entry.id;
+				const created = entry.timestamp ? new Date(entry.timestamp) : undefined;
+				if (created && !Number.isNaN(created.getTime())) summary.created = created;
 			} else {
 				const role = entry.type === "message" ? entry.message?.role : undefined;
 				const prompt = userPrompt(entry);
@@ -120,9 +140,10 @@ async function readSummary(file: string): Promise<SessionSummary> {
 				if (prompt === undefined) continue;
 				if (firstOffset === undefined) {
 					firstOffset = lineOffset;
-					summary.firstMessage = prompt;
+					summary.firstMessage = prompt.text;
+					summary.firstMessageFull = prompt.full;
 				}
-				last = { offset: lineOffset, text: prompt };
+				last = { offset: lineOffset, ...prompt };
 			}
 		}
 		if (truncated) {
@@ -131,10 +152,12 @@ async function readSummary(file: string): Promise<SessionSummary> {
 				const first = await findFirstPrompt(handle, stat.size);
 				firstOffset = first?.offset;
 				summary.firstMessage = first?.text;
+				summary.firstMessageFull = first?.full;
 			}
 			last = await findLastPrompt(handle, stat.size);
 		}
 		summary.lastMessage = last?.text;
+		summary.lastMessageFull = last?.full;
 		summary.singlePrompt = last !== undefined && last.offset === firstOffset;
 		return summary;
 	} finally {
@@ -146,6 +169,7 @@ export interface SessionLine {
 	type?: string;
 	title?: string;
 	id?: string;
+	timestamp?: string;
 	customType?: string;
 	attribution?: string;
 	details?: unknown;
@@ -186,10 +210,10 @@ export function userPromptContent(entry: SessionLine): unknown {
 	return skillPromptText(custom.details) ?? custom.content;
 }
 
-/** The first line of a prompt the user sent (see {@link userPromptContent}), or undefined. */
-function userPrompt(entry: SessionLine): string | undefined {
+/** A prompt the user sent (see {@link userPromptContent}), or undefined. */
+function userPrompt(entry: SessionLine): Prompt | undefined {
 	const content = userPromptContent(entry);
-	return content === undefined ? undefined : promptText(content);
+	return content === undefined ? undefined : promptOf(content);
 }
 
 /** What the user typed to invoke a skill, as omp's titles show it (never the expanded SKILL.md body). */
@@ -205,7 +229,7 @@ function skillPromptText(details: unknown): string | undefined {
 }
 
 /** A user prompt in a line of the session file, or undefined (cheap check before parsing). */
-function promptInLine(line: string): string | undefined {
+function promptInLine(line: string): Prompt | undefined {
 	if (!line.includes('"user"')) return undefined;
 	try {
 		return userPrompt(JSON.parse(line));
@@ -215,10 +239,7 @@ function promptInLine(line: string): string | undefined {
 }
 
 /** The first prompt of a long file, read forwards in chunks up to {@link MAX_TAIL_BYTES}. */
-async function findFirstPrompt(
-	handle: fs.FileHandle,
-	size: number,
-): Promise<{ offset: number; text: string } | undefined> {
+async function findFirstPrompt(handle: fs.FileHandle, size: number): Promise<PromptAt | undefined> {
 	/** Chunks of the line being read, until its end turns up. */
 	let parts: Buffer[] = [];
 	let lineOffset = 0;
@@ -231,7 +252,7 @@ async function findFirstPrompt(
 		for (let newline = data.indexOf(0x0a); newline >= 0; newline = data.indexOf(0x0a, from)) {
 			const line = Buffer.concat([...parts, data.subarray(from, newline)]).toString("utf8");
 			const prompt = promptInLine(line);
-			if (prompt !== undefined) return { offset: lineOffset, text: prompt };
+			if (prompt !== undefined) return { offset: lineOffset, ...prompt };
 			parts = [];
 			lineOffset = position + newline + 1;
 			from = newline + 1;
@@ -247,10 +268,7 @@ async function findFirstPrompt(
  * backwards from the end, up to {@link MAX_TAIL_BYTES}, and only lines that
  * can be a user message are parsed.
  */
-async function findLastPrompt(
-	handle: fs.FileHandle,
-	size: number,
-): Promise<{ offset: number; text: string } | undefined> {
+async function findLastPrompt(handle: fs.FileHandle, size: number): Promise<PromptAt | undefined> {
 	let end = size;
 	/** Bytes of a line cut by the previous chunk's start, joined with the next chunk read. */
 	let carry = Buffer.alloc(0);
@@ -274,14 +292,18 @@ async function findLastPrompt(
 			const line = data.subarray(lineStart, lineEnd).toString("utf8");
 			lineEnd = lineStart - 1;
 			const prompt = promptInLine(line);
-			if (prompt !== undefined) return { offset: start + lineStart, text: prompt };
+			if (prompt !== undefined) return { offset: start + lineStart, ...prompt };
 		}
 		end = start;
 	}
 	return undefined;
 }
 
-function promptText(content: unknown): string | undefined {
+/**
+ * The prompt's first line (cut to 200 characters) and the whole of it on one
+ * line; past {@link PROMPT_FULL_MAX_CHARS} its middle gives way to " … ".
+ */
+function promptOf(content: unknown): Prompt | undefined {
 	const joined =
 		typeof content === "string"
 			? content
@@ -292,9 +314,15 @@ function promptText(content: unknown): string | undefined {
 						.join(" ")
 				: "";
 	// A reply to selected text lists as what the user wrote, not the wrapper around it.
-	const text = parseQuotedPrompt(joined)?.message ?? joined;
-	const firstLine = text.trim().split("\n")[0]?.trim();
-	return firstLine ? firstLine.slice(0, 200) : undefined;
+	const text = (parseQuotedPrompt(joined)?.message ?? joined).trim();
+	const firstLine = text.split("\n")[0]?.trim();
+	if (!firstLine) return undefined;
+	const whole = text.replace(/\s+/g, " ");
+	const half = PROMPT_FULL_MAX_CHARS / 2;
+	return {
+		text: firstLine.slice(0, 200),
+		full: whole.length > PROMPT_FULL_MAX_CHARS ? `${whole.slice(0, half)} … ${whole.slice(-half)}` : whole,
+	};
 }
 
 /** The session file and its artifacts directory (omp deletes both together). */

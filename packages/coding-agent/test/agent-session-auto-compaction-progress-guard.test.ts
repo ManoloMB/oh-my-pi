@@ -959,10 +959,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(promptSpy).not.toHaveBeenCalled();
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "handoff document",
-		});
+		const committed = sessionManager.getBranch().at(-1);
+		if (committed?.type !== "compaction") throw new Error("Expected a committed compaction entry");
+		expect(committed.summary).toStartWith("handoff document");
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -975,7 +974,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// Native (handoff) compaction is not extension-owned.
 		expect(compactEvents).toHaveLength(1);
 		expect(compactEvents[0]?.fromExtension).toBe(false);
-		expect(compactEvents[0]?.compactionEntry).toMatchObject({ summary: "handoff document" });
+		expect(compactEvents[0]?.compactionEntry?.summary).toStartWith("handoff document");
 		expect(compactEvents[0]?.compactionEntry?.fromExtension).toBeFalsy();
 	});
 
@@ -1252,10 +1251,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		await session.waitForIdle();
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "speculative handoff",
-		});
+		const committed = sessionManager.getBranch().at(-1);
+		if (committed?.type !== "compaction") throw new Error("Expected a committed compaction entry");
+		expect(committed.summary).toStartWith("speculative handoff");
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -1340,10 +1338,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		await session.waitForIdle();
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "recovery handoff",
-		});
+		const committed = sessionManager.getBranch().at(-1);
+		if (committed?.type !== "compaction") throw new Error("Expected a committed compaction entry");
+		expect(committed.summary).toStartWith("recovery handoff");
 	});
 
 	it("retries a small-window overflow when the reserve exceeds the model window", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionListItem } from "../src/protocol";
-import { compactAge, previewOf, sectionOf } from "../webview/chat/history-sections";
+import { compactAge, durationLabel, previewOf, sectionOf } from "../webview/chat/history-sections";
 
 const item = (fields: Partial<SessionListItem> = {}): SessionListItem => ({
 	path: "/s.jsonl",
@@ -56,5 +56,18 @@ describe("history row preview", () => {
 		expect(previewOf(item({ firstPrompt: "first", lastPrompt: "latest" }))).toBe("latest");
 		expect(previewOf(item({ label: "first", firstPrompt: "first" }))).toBeUndefined();
 		expect(previewOf(item({ label: "Renamed", firstPrompt: "first" }))).toBe("first");
+	});
+});
+
+describe("durationLabel", () => {
+	it("reads minutes, hours with leftover minutes, then days with leftover hours", () => {
+		const start = at(4, 8);
+		expect(durationLabel(start, start + 30_000)).toBe("<1m");
+		expect(durationLabel(start, start + 45 * 60_000)).toBe("45m");
+		expect(durationLabel(start, start + 120 * 60_000)).toBe("2h");
+		expect(durationLabel(start, start + 135 * 60_000)).toBe("2h 15m");
+		expect(durationLabel(start, start + 28 * 3_600_000)).toBe("1d 4h");
+		// A clock that moved backwards never yields a negative length.
+		expect(durationLabel(start, start - 60_000)).toBe("<1m");
 	});
 });

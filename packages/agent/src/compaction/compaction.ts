@@ -63,6 +63,12 @@ import {
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { NativeCompactionError } from "./errors";
 import {
+	buildCompactionFidelity,
+	type CompactionAnchors,
+	stripCompactionFidelityBlocks,
+	upsertCompactionFidelity,
+} from "./fidelity";
+import {
 	type ConvertToLlm,
 	createCompactionSummaryMessage,
 	defaultConvertToLlm,
@@ -107,6 +113,12 @@ import {
 export interface CompactionDetails {
 	readFiles: string[];
 	modifiedFiles: string[];
+	/** Exact identifiers carried verbatim across compactions (see `fidelity.ts`). */
+	anchors?: CompactionAnchors;
+	/** User messages from summarized history, verbatim, oldest first. */
+	userMessages?: string[];
+	/** User messages dropped from {@link userMessages} by the budget, cumulative. */
+	userMessagesOmitted?: number;
 }
 
 /**
@@ -746,6 +758,8 @@ export interface SummaryOptions {
 	 * stacks on top of the inner backoff.
 	 */
 	oneshotRetry?: OneshotRetryOptions | false;
+	/** Text rendered into the summary's `<recovery>` block on local summaries. */
+	recoveryPointer?: string;
 }
 
 /**
@@ -1276,6 +1290,8 @@ export interface CompactionPreparation {
 	previousSummaryTimestamp?: string;
 	/** Preserved opaque compaction payload from the previous compaction, if any. */
 	previousPreserveData?: Record<string, unknown>;
+	/** Details of the previous pi-generated compaction, for fidelity carry-forward. */
+	previousDetails?: CompactionDetails;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
 	/** Compaction settions from settings.jsonl	*/
@@ -1484,6 +1500,10 @@ export function prepareCompaction(
 		previousSummary: previousCompaction?.summary,
 		previousSummaryTimestamp: previousCompaction?.timestamp,
 		previousPreserveData: previousCompaction?.preserveData,
+		previousDetails:
+			previousCompaction && !previousCompaction.fromExtension
+				? (previousCompaction.details as CompactionDetails | undefined)
+				: undefined,
 		fileOps,
 		settings,
 	};
@@ -1651,8 +1671,9 @@ export async function compact(
 	const previousSnapcompactArchiveText = previousSnapcompactArchive
 		? snapcompact.archiveSourceText(previousSnapcompactArchive)
 		: undefined;
+	// Fidelity blocks are re-rendered mechanically below; the summarizer must not paraphrase them.
 	const previousSummaryForCompaction = mergePreviousSummaryWithSnapcompactArchive(
-		previousSummary,
+		previousSummary === undefined ? undefined : stripCompactionFidelityBlocks(previousSummary),
 		previousSnapcompactArchiveText,
 	);
 	const snapcompactArchiveMigrationMessage = previousSnapcompactArchiveText
@@ -2102,6 +2123,12 @@ export async function compact(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
+	const fidelity = buildCompactionFidelity(
+		[...messagesToSummarize, ...turnPrefixMessages],
+		preparation.previousDetails,
+	);
+	// Provider-native/remote compactions replay their own history; fidelity blocks accompany local summaries only.
+	if (!usedRemoteCompaction) summary = upsertCompactionFidelity(summary, fidelity, options?.recoveryPointer);
 	if (nativeSummary !== undefined) {
 		// The replayed block stays byte-identical to the API's summary so it
 		// matches its signature. The harness file lists above travel
@@ -2138,7 +2165,7 @@ export async function compact(
 		shortSummary,
 		firstKeptEntryId: nativeSummary !== undefined ? nativeFirstKeptEntryId : firstKeptEntryId,
 		tokensBefore,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: { readFiles, modifiedFiles, ...fidelity } as CompactionDetails,
 		preserveData: finalPreserveData,
 	};
 }

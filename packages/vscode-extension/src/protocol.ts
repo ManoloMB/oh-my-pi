@@ -194,8 +194,18 @@ export interface SessionListItem {
 	firstPrompt?: string;
 	/** First line of its latest prompt; absent when the session has a single prompt, or unknown. */
 	lastPrompt?: string;
+	/** The whole first prompt on one line (a very long one keeps its start and end): the Today cards show it. */
+	firstPromptFull?: string;
+	/** The whole latest prompt, the same way; absent when `lastPrompt` is. */
+	lastPromptFull?: string;
 	/** When the session file last changed (epoch ms); the panel groups chats by its calendar day and shows their age. */
 	modified: number;
+	/** When the session started (epoch ms); the Today cards show it with how long the chat ran. */
+	created?: number;
+	/** User and assistant messages counted; a lower bound when `messagesPartial`. */
+	messages?: number;
+	/** Only the start of a long session file was counted. */
+	messagesPartial?: boolean;
 	active: boolean;
 	activity?: SessionActivity;
 	/** A chat without a workspace (listed in the history panel's own section). */

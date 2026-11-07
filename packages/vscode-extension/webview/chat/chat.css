@@ -2104,6 +2104,326 @@ code {
 	color: var(--c-fg-3);
 }
 
+/*
+ * Today's chats: portrait cards in a grid. Hovering one turns it to its details
+ * and grows it in place: its row grows with it, so the cards below slide down to
+ * make room (nothing is covered) and slide back when it shrinks; the other cards
+ * step back slightly so the turned one stands out. Its top-left corner never
+ * moves, so the pointer stays on it while everything reorganizes.
+ */
+.history-cards {
+	--card-height: 188px;
+	--card-open-height: 330px;
+	/* Ease in and out, so growing, widening and turning read as one unhurried movement. */
+	--card-ease: cubic-bezier(0.65, 0, 0.35, 1);
+	--card-duration: 0.85s;
+	flex: none;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+	align-items: start;
+	gap: 8px;
+	padding: 8px 4px 4px;
+	/* history.ts spells out the tracks while a card is hovered: its column widens, the others narrow. */
+	transition: grid-template-columns var(--card-duration) var(--card-ease);
+}
+
+.history-card {
+	position: relative;
+	height: var(--card-height);
+	min-width: 0;
+	perspective: 900px;
+	cursor: pointer;
+	transition:
+		height var(--card-duration) var(--card-ease),
+		opacity 0.5s ease,
+		transform var(--card-duration) var(--card-ease),
+		filter 0.5s ease;
+}
+
+.history-card-inner {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	transform-style: preserve-3d;
+	transition: transform var(--card-duration) var(--card-ease);
+}
+
+/* Renaming keeps the front (its name field) in view and the card at its size. */
+.history-card:hover:not(.editing) {
+	height: var(--card-open-height);
+}
+
+.history-card:hover:not(.editing) .history-card-inner {
+	transform: rotateY(180deg);
+}
+
+.history-cards:has(.history-card:hover:not(.editing)) .history-card:not(:hover) {
+	opacity: 0.6;
+	transform: scale(0.97);
+	filter: saturate(0.7);
+}
+
+.history-card-face {
+	transition: box-shadow var(--card-duration) ease;
+}
+
+.history-card:hover:not(.editing) .history-card-face {
+	box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
+}
+
+.history-card.active:hover:not(.editing) .history-card-face {
+	box-shadow:
+		inset 0 3px 0 var(--omp-accent),
+		0 10px 28px rgb(0 0 0 / 0.35);
+}
+
+.history-card-face {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	padding: 10px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: var(--r-lg);
+	background: var(--c-surface);
+	backface-visibility: hidden;
+	overflow: hidden;
+}
+
+.history-card-back {
+	transform: rotateY(180deg);
+	pointer-events: none;
+}
+
+/* Only the face in view takes clicks, so the back's buttons work once it turned. */
+.history-card:hover:not(.editing) .history-card-front {
+	pointer-events: none;
+}
+
+.history-card:hover:not(.editing) .history-card-back {
+	pointer-events: auto;
+}
+
+/* The open chat: accent border and a bar along the top. */
+.history-card.active .history-card-face {
+	border-color: color-mix(in srgb, var(--omp-accent) 60%, transparent);
+	box-shadow: inset 0 3px 0 var(--omp-accent);
+}
+
+.history-card[aria-selected="true"] .history-card-face {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+/* Clipped, not overflowing, while a neighbour's widening narrows this card. */
+.history-card-top {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	color: var(--c-fg-3);
+	font-size: var(--fs-sm);
+}
+
+.history-card-age {
+	flex: 1;
+}
+
+.history-card-badge {
+	padding: 0 6px;
+	border-radius: 9999px;
+	background: color-mix(in srgb, var(--omp-accent) 18%, transparent);
+	color: var(--omp-accent);
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+/* Two lines for the name, so the latest prompt below it keeps four whole lines. */
+.history-card-title {
+	flex: none;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+/* Finished while you were elsewhere: the name stands out like an unread message. */
+.history-card.unread .history-card-title {
+	font-weight: 700;
+}
+
+/* The latest prompt under the name, labelled, in smaller type so more of it fits. */
+.history-card-preview {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.history-card-preview-text {
+	flex: none;
+	color: var(--c-fg-3);
+	font-size: 11px;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-line-clamp: 4;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.history-card-foot {
+	margin-top: auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	color: var(--c-fg-3);
+	font-size: 11px;
+}
+
+.history-card-facts {
+	flex: none;
+	margin: 0;
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 2px 8px;
+	font-size: 10.5px;
+}
+
+.history-card-fact {
+	display: contents;
+}
+
+.history-card-fact dt {
+	color: var(--c-fg-3);
+}
+
+.history-card-fact dd {
+	margin: 0;
+	text-align: right;
+	white-space: nowrap;
+}
+
+/*
+ * First and last user message: a bold label on its own line, the prompt under
+ * it, in small type from the start. Each may shrink so both and the buttons
+ * stay inside the card.
+ */
+.history-card-prompt {
+	flex: 0 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	color: var(--c-fg-2);
+	font-size: 10.5px;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.history-card-prompt-label {
+	flex: none;
+	color: var(--c-fg);
+	font-size: 9.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	line-height: 1.4;
+	text-transform: uppercase;
+}
+
+/* Up to eight lines, less when the other prompt needs room; `clipped` (history.ts) when the whole prompt does not fit. */
+.history-card-prompt-body {
+	flex: 0 1 auto;
+	min-height: 0;
+	max-height: calc(8 * 1.35em);
+	overflow: hidden;
+}
+
+.history-card-prompt-head {
+	display: block;
+}
+
+.history-card-prompt-tail {
+	display: none;
+}
+
+/* Too long: its start ending in "…", then its last two lines. */
+.history-card-prompt-body.clipped {
+	display: flex;
+	flex-direction: column;
+}
+
+.history-card-prompt-body.clipped .history-card-prompt-head {
+	flex: 0 1 auto;
+	min-height: 1.35em;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 5;
+	overflow: hidden;
+}
+
+.history-card-prompt-body.clipped .history-card-prompt-tail {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	height: calc(2 * 1.35em);
+	overflow: hidden;
+}
+
+.history-card-actions {
+	flex: none;
+	margin-top: auto;
+	display: flex;
+	justify-content: flex-end;
+	gap: 4px;
+}
+
+.history-card .history-row-button {
+	margin: 0;
+	opacity: 1;
+}
+
+.history-card .history-rename {
+	flex: none;
+	width: 100%;
+}
+
+/* No turning, growing or sliding: the card opens at once and the back fades in over the front. */
+@media (prefers-reduced-motion: reduce) {
+	.history-cards,
+	.history-card,
+	.history-card-inner {
+		transition: none;
+	}
+
+	.history-cards:has(.history-card:hover:not(.editing)) .history-card:not(:hover),
+	.history-card:hover:not(.editing) .history-card-inner,
+	.history-card-back {
+		transform: none;
+	}
+
+	.history-card-back {
+		opacity: 0;
+		transition: opacity 0.15s;
+	}
+
+	.history-card:hover:not(.editing) .history-card-back {
+		opacity: 1;
+	}
+}
+
 /* Section heading (Needs you, Running, Today…): sticks to the top while its chats scroll under it. */
 .history-section {
 	position: sticky;

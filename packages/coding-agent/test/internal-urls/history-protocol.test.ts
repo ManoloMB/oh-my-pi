@@ -29,8 +29,6 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
-import { cfgCompactionExperimentalContextManagement } from "@oh-my-pi/pi-coding-agent/session/context-settings";
-
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "history-protocol-"));
 	try {
@@ -326,7 +324,6 @@ describe("history:// protocol", () => {
 		const branch = currentBranchFixture();
 		const siblingOnly = "sibling branch text must not leak";
 		const resource = await InternalUrlRouter.instance().resolve("history://current/full", {
-			experimentalContextManagement: true,
 			getSessionBranch: () => branch,
 		});
 
@@ -339,38 +336,27 @@ describe("history:// protocol", () => {
 		expect(resource.sourcePath).toBeUndefined();
 	});
 
-	it("rejects current/full when disabled or without a caller-bound branch", async () => {
-		await expect(
-			InternalUrlRouter.instance().resolve("history://current/full", {
-				experimentalContextManagement: false,
-				getSessionBranch: currentBranchFixture,
-			}),
-		).rejects.toThrow("experimentalContextManagement");
-		await expect(
-			InternalUrlRouter.instance().resolve("history://current/full", {
-				experimentalContextManagement: true,
-			}),
-		).rejects.toThrow("bound live session branch");
+	it("rejects current/full without a caller-bound branch", async () => {
+		await expect(InternalUrlRouter.instance().resolve("history://current/full", {})).rejects.toThrow(
+			"bound live session branch",
+		);
 	});
 
 	it("rejects malformed current history routes without consulting agent history", async () => {
 		await expect(
 			InternalUrlRouter.instance().resolve("history://current/full?unexpected=true", {
-				experimentalContextManagement: true,
 				getSessionBranch: currentBranchFixture,
 			}),
 		).rejects.toThrow("Invalid history://current route");
 		await expect(
 			InternalUrlRouter.instance().resolve("history://current/extra", {
-				experimentalContextManagement: true,
 				getSessionBranch: currentBranchFixture,
 			}),
 		).rejects.toThrow("Invalid history://current route");
 	});
 
-	it("read applies selectors to caller-bound full history", async () => {
+	it("read applies selectors to caller-bound full history without experimental context management", async () => {
 		const settings = Settings.isolated();
-		cfgCompactionExperimentalContextManagement.set(settings, true);
 		const branch = currentBranchFixture();
 		const manager = {
 			getBranch: () => branch,
@@ -391,6 +377,24 @@ describe("history:// protocol", () => {
 		if (output?.type !== "text") throw new Error("Expected text output");
 		expect(output.text).toContain("# Current branch — full history");
 		expect(output.text).not.toContain("oldest raw request survives");
+	});
+
+	it("read rejects current/full for a session that does not own the journal", async () => {
+		const manager = {
+			getBranch: () => currentBranchFixture(),
+			getSessionId: () => "parent-session",
+		} as unknown as NonNullable<ToolSession["sessionManager"]>;
+		const tool = new ReadTool(
+			makeToolSession(os.tmpdir(), undefined, {
+				settings: Settings.isolated(),
+				getSessionId: () => "advisor-session",
+				sessionManager: manager,
+			}),
+		);
+
+		await expect(tool.execute("foreign-history", { path: "history://current/full" })).rejects.toThrow(
+			"unavailable for this session",
+		);
 	});
 
 	it("read applies line selectors to history transcripts", async () => {

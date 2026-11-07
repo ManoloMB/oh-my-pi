@@ -62,6 +62,17 @@ describe("normalizeTools — pruneDescriptions", () => {
 		expect(hasField(tool?.parameters, "nested")).toBe(true);
 	});
 
+	it("appends rendered examples to the native description only when not pruning", () => {
+		const tool = {
+			...makeTool(),
+			examples: [{ caption: "Read src", call: { path: "src/a.ts", nested: { inner: "x" } } }],
+		};
+		const described = normalizeTools([tool], { injectIntent: false })?.[0]?.description ?? "";
+		expect(described).toStartWith("top-level tool description\n\n<examples>");
+		expect(described).toContain('demo(path="src/a.ts"');
+		expect(normalizeTools([tool], { injectIntent: false, pruneDescriptions: true })?.[0]?.description).toBe("");
+	});
+
 	it("leaves a tool-owned intent field untouched when injecting", () => {
 		const ownedSchema = type({
 			path: type("string").describe("where to read"),

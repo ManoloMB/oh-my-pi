@@ -1,0 +1,1 @@
+Verbatim pre-compaction history, including full tool output, stays readable: `read` path `history://current/full` (line selectors work) or `grep` with that path; each entry starts with its durable session id.

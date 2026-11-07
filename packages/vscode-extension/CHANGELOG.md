@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.31.0]
+
+### Changed
+
+- The history opens with only Today unfolded (Running always shows), and Today's chats appear as portrait cards: state, age, name, the last user message (labelled, in small type), message count and pending skill changes. Hovering a card turns it over and grows it in place, taller and wider, in one unhurried eased movement while the cards below slide down, the neighbouring column narrows and the others step back; its back shows when the chat started, how long it ran, and under bold FIRST USER MESSAGE and LAST USER MESSAGE labels the whole prompts in small type (a prompt too long to fit shows its start, "…", and its end), plus the rename and delete buttons. With reduced motion the card opens without animation. Searching still lists every match as rows
+
 ## [0.30.0]
 
 ### Changed

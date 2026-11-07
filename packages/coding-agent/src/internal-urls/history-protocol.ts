@@ -15,7 +15,7 @@
  * URL forms:
  * - history:// - Index of all registry + on-disk agents (id, status, kind, last activity)
  * - history://<agentId> - Concise markdown transcript of that agent
- * - history://current/full - Full, caller-bound current branch history (experimental)
+ * - history://current/full - Full, caller-bound current branch history (caller-owned session only)
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
@@ -369,12 +369,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	}
 
 	#resolveCurrentFull(url: InternalUrl, context: ResolveContext | undefined): InternalResource {
-		if (!context?.experimentalContextManagement) {
-			throw new Error(
-				"history://current/full is available only when compaction.experimentalContextManagement is enabled",
-			);
-		}
-		const branch = context.getSessionBranch?.();
+		const branch = context?.getSessionBranch?.();
 		if (!branch) {
 			throw new Error("history://current/full requires a bound live session branch");
 		}
