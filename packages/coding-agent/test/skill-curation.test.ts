@@ -274,6 +274,20 @@ describe("SkillEditTool", () => {
 		expect(record?.reasons).toHaveLength(2);
 	});
 
+	it("keeps every edit of one file when the calls arrive concurrently", async () => {
+		const demo = skillAt("demo");
+		const tool = new SkillEditTool([demo]);
+		// Models send several edits in one message; both must land on the staged file.
+		const results = await Promise.all([
+			edit(tool, {}),
+			edit(tool, { old_text: "# Demo", new_text: "# Demo folder" }),
+		]);
+		expect(results.map(result => result.isError)).toEqual([undefined, undefined]);
+		expect(tool.edits.get("demo")?.files.get(demo.filePath)?.after).toBe(
+			SKILL_FILE.replace("ls --long-format demo", "ls -l demo").replace("# Demo", "# Demo folder"),
+		);
+	});
+
 	it("rewrites a whole file when old_text is omitted, still guarding the frontmatter", async () => {
 		const demo = skillAt("demo");
 		const tool = new SkillEditTool([demo]);
@@ -381,6 +395,77 @@ describe("skill proposals", () => {
 			status: "rejected",
 			rejectReason: "not needed",
 		});
+	});
+
+	it("still applies a proposal after another approved one changed other parts of the file", async () => {
+		const agentDir = path.join(root, "agent");
+		const demo = skillAt("demo");
+		// Two curation turns stage edits against the same original skill.
+		const stage = async (old_text: string, new_text: string) => {
+			const tool = new SkillEditTool([demo]);
+			await tool.execute("call", { skill: "demo", old_text, new_text, summary: "s", reason: "r" });
+			const files = [...(tool.edits.get("demo")?.files ?? [])].map(([filePath, file]) => ({
+				path: filePath,
+				...file,
+			}));
+			return writeSkillProposal({ skill: "demo", summary: "s", reason: "r", files }, agentDir);
+		};
+		const command = await stage("ls --long-format demo", "ls -l demo");
+		const heading = await stage("# Demo", "# Demo folder");
+		const clash = await stage("To list the demo folder run", "List the demo folder with");
+
+		await approveSkillProposal(command.id, agentDir);
+		const listed = await listSkillProposals({}, agentDir);
+		expect(listed.find(p => p.id === heading.id)?.stale).toBe(false);
+		expect(listed.find(p => p.id === clash.id)?.stale).toBe(false);
+
+		const { history } = await approveSkillProposal(heading.id, agentDir);
+		const both = SKILL_FILE.replace("ls --long-format demo", "ls -l demo").replace("# Demo", "# Demo folder");
+		expect(await Bun.file(demo.filePath).text()).toBe(both);
+		// The history records the file as it really was, so the revert undoes only this proposal.
+		await revertSkillHistoryEntry(history.id, agentDir);
+		expect(await Bun.file(demo.filePath).text()).toBe(SKILL_FILE.replace("ls --long-format demo", "ls -l demo"));
+
+		// A replacement whose text another change rewrote no longer applies.
+		await Bun.write(demo.filePath, "---\nname: demo\ndescription: d\n---\n\nRun `ls -l demo`.\n");
+		await expect(approveSkillProposal(clash.id, agentDir)).rejects.toThrow("outdated");
+	});
+
+	it("creates and deletes skill files on approval, and reverting restores both", async () => {
+		const agentDir = path.join(root, "agent");
+		const demo = skillAt("demo");
+		const reference = path.join(demo.baseDir, "reference.md");
+		await Bun.write(reference, "Old notes.\n");
+		const tool = new SkillEditTool([demo]);
+		const common = { skill: "demo", summary: "Lists through a script", reason: "r" };
+		const created = await tool.execute("a", {
+			...common,
+			file: "scripts/list.sh",
+			new_text: "#!/bin/sh\nls -l demo\n",
+		});
+		expect(created.isError).toBeUndefined();
+		expect((await tool.execute("b", { ...common, file: "reference.md", delete: true })).isError).toBeUndefined();
+		expect((await tool.execute("c", { ...common, delete: true })).isError).toBe(true);
+		expect((await tool.execute("d", { ...common, file: "missing.md", old_text: "x", new_text: "y" })).isError).toBe(
+			true,
+		);
+
+		const files = [...(tool.edits.get("demo")?.files ?? [])].map(([filePath, file]) => ({ path: filePath, ...file }));
+		const proposal = await writeSkillProposal({ ...common, files }, agentDir);
+		const [listed] = await listSkillProposals({}, agentDir);
+		expect(listed.stale).toBe(false);
+		expect(listed.diff).toContain("--- scripts/list.sh (new file)");
+		expect(listed.diff).toContain("--- reference.md (deleted)");
+
+		const { history } = await approveSkillProposal(proposal.id, agentDir);
+		const script = path.join(demo.baseDir, "scripts", "list.sh");
+		expect(await Bun.file(script).text()).toBe("#!/bin/sh\nls -l demo\n");
+		expect((await fs.stat(script)).mode & 0o111).not.toBe(0);
+		expect(await Bun.file(reference).exists()).toBe(false);
+
+		await revertSkillHistoryEntry(history.id, agentDir);
+		expect(await Bun.file(script).exists()).toBe(false);
+		expect(await Bun.file(reference).text()).toBe("Old notes.\n");
 	});
 });
 

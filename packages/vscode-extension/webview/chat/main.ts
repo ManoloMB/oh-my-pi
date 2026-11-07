@@ -10,6 +10,7 @@ import { Composer, type ComposerState } from "./composer";
 import { Header } from "./header";
 import { HistoryPanel } from "./history";
 import { FindBar } from "./find";
+import { PlanFeedbackDialog } from "./plan-feedback";
 import { Transcript, brailleSpinner } from "./transcript";
 
 type ChatViewState = Partial<ComposerState>;
@@ -19,10 +20,18 @@ const post = (request: ChatRequest) => vscode.postMessage(request);
 
 const header = new Header(post, () => history.toggle());
 // The History replaces the chat: the composer (with its queue and notices) has nothing to send to there.
-const history = new HistoryPanel(post, open => {
-	header.setHistoryMode(open);
-	composer.element.hidden = open;
-});
+const history = new HistoryPanel(
+	post,
+	open => {
+		header.setHistoryMode(open);
+		composer.element.hidden = open;
+	},
+	(path, text) => {
+		// The open chat shows already; another one first loads its transcript (`state`, then `history`).
+		if (path === sessionFile) find.openWith(text);
+		else pendingFind = { path, text };
+	},
+);
 const saved = vscode.getState();
 const composer = new Composer(
 	post,
@@ -45,10 +54,12 @@ const composer = new Composer(
 		promptHistory: () => transcript.recentPrompts(),
 	},
 );
+const planFeedback = new PlanFeedbackDialog(post, () => composer.cancelDictation());
 const transcript = new Transcript(
 	post,
 	prompt => composer.fill(prompt),
 	text => composer.setQuote(text),
+	planFeedback,
 );
 
 const statusSpinner = brailleSpinner();
@@ -96,6 +107,8 @@ window.addEventListener("focus", () => post({ type: "focusChanged", focused: tru
 window.addEventListener("blur", () => post({ type: "focusChanged", focused: false }));
 
 let sessionFile: string | undefined;
+/** A match to find once the chat opened from a history search shows its transcript. */
+let pendingFind: { path: string; text: string } | undefined;
 
 let busy = false;
 let busySince: number | undefined;
@@ -132,6 +145,8 @@ function handle(update: ChatUpdate): void {
 			transcript.setHistory(update.messages, update.commandOutputs);
 			composer.resetHistoryNavigation();
 			history.close();
+			if (pendingFind && pendingFind.path === sessionFile) find.openWith(pendingFind.text);
+			pendingFind = undefined;
 			break;
 		case "event": {
 			const { event } = update;
@@ -161,6 +176,7 @@ function handle(update: ChatUpdate): void {
 			const { state } = update;
 			header.setState(state, update.stats, update.title, update.noWorkspace);
 			history.setChatNoWorkspace(update.noWorkspace);
+			transcript.setChangesAvailable(!update.noWorkspace);
 			composer.picker.setCurrent(state.model);
 			if (state.thinkingLevel) composer.picker.setThinkingLevel(state.thinkingLevel);
 			composer.setUsage(state, update.stats);
@@ -184,6 +200,9 @@ function handle(update: ChatUpdate): void {
 			break;
 		case "sessions":
 			history.setSessions(update.sessions);
+			break;
+		case "sessionSearch":
+			history.setSearchResults(update.query, update.hits);
 			break;
 		case "sessionActivity":
 			history.setActivity(update.activity);
@@ -214,6 +233,9 @@ function handle(update: ChatUpdate): void {
 		case "asyncJobs":
 			composer.setAsyncJobs(update.jobs);
 			break;
+		case "todos":
+			composer.setTodos(update.phases);
+			break;
 		case "commands":
 			composer.setCommands(update.commands);
 			break;
@@ -233,16 +255,19 @@ function handle(update: ChatUpdate): void {
 			transcript.editAborted();
 			break;
 		case "dictation":
-			composer.dictationUpdate(update.state, update.text, update.error);
+			if (planFeedback.ownsDictation) planFeedback.dictationUpdate(update.state, update.text, update.error);
+			else composer.dictationUpdate(update.state, update.text, update.error);
 			break;
 		case "wordPrediction":
 			composer.wordPrediction(update.requestId, update.suffix);
 			break;
 		case "dictationText":
-			composer.dictationText(update.text, update.submit);
+			if (planFeedback.ownsDictation) planFeedback.dictationText(update.text, update.submit);
+			else composer.dictationText(update.text, update.submit);
 			break;
 		case "toggleDictation":
-			composer.toggleDictation();
+			if (planFeedback.ownsDictation) planFeedback.toggleDictation();
+			else composer.toggleDictation();
 			break;
 		case "openFind":
 			openFind();

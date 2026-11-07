@@ -204,7 +204,7 @@ async function reversePatches(
 }
 
 /** Paths whose content or mode differs between two trees, nested repositories excluded. */
-async function changedFiles(root: string, from: string, to: string): Promise<string[]> {
+export async function changedFiles(root: string, from: string, to: string): Promise<string[]> {
 	if (from === to) return [];
 	const fields = (await git(root, ["diff-tree", "-r", "-z", "--no-renames", from, to])).split("\0");
 	const files: string[] = [];

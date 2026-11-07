@@ -6,6 +6,7 @@ import { CommandOutputStore } from "./chat/command-outputs";
 import type { ChatSession } from "./chat/chat-session";
 import { ChatRegistry } from "./chat/chat-views";
 import { agentDir, readConfig, workspaceCwd } from "./config";
+import { ChangeViewer } from "./editor-changes/change-viewer";
 import { bindNoWorkspaceState } from "./no-workspace";
 import { renameStoredSession } from "./sessions/rename";
 import { guessSessionDir, sessionLabel, sessionPaths } from "./sessions/session-store";
@@ -32,11 +33,13 @@ export function activate(context: vscode.ExtensionContext): void {
 			login: session => void login(session),
 			attachFiles: session => void attachFiles(session),
 			deleteSession: (sessionFile, label) => deleteSession(sessionFile, label),
+			showToolChanges: (session, toolCallId, file) => changeViewer.show(session, toolCallId, file),
 		},
 		checkpoints,
 		proposals,
 		commandOutputs,
 	);
+	const changeViewer = new ChangeViewer();
 	// Running and finished-unseen marks for every session with a process in this window.
 	const tree = new SessionsTree(() => chats.pool.activities());
 	const skillsTree = new SkillsTree(log, proposals);
@@ -263,6 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		tree,
 		skillsTree,
 		chats,
+		changeViewer,
 		statusBar,
 		vscode.window.registerWebviewViewProvider(ChatRegistry.viewId, chats, {
 			webviewOptions: { retainContextWhenHidden: true },

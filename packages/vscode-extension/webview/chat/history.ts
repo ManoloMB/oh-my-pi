@@ -1,24 +1,40 @@
 /**
  * Session history overlay: a searchable list of chats covering the transcript,
  * filtered by two tabs: the workspace's sessions or the chats without a
- * workspace (it opens on the open chat's group). Only chats active in the last
- * 24 hours show at first; a button under them unfolds the older ones (a search
- * shows them all). Opening it asks the host for `listSessions`; picking a row
- * posts `openSession`, its pencil renames it in place (`renameSession`), its
- * trash deletes it after the host's confirmation (`deleteSession`). Sessions
- * working in the window show a spinner, those that finished unseen a green dot,
- * the open one a blue arrow,
- * and those with skill proposals awaiting a decision a yellow pill counting them.
+ * workspace (it opens on the open chat's group). Chats are grouped under sticky
+ * headings (see history-sections.ts): those running, then Today, Yesterday, This
+ * week and Older; every section but Running folds, This week and Older start
+ * folded, and a search unfolds everything.
+ * Each row shows the chat's name, its age and its latest prompt. Opening it asks
+ * the host for `listSessions`; picking a row posts `openSession`, its pencil
+ * renames it in place (`renameSession`), its trash deletes it after the host's
+ * confirmation (`deleteSession`). Sessions working in the window show a spinner,
+ * those that finished unseen a green dot and a bold name, the open one an accent
+ * bar, and those with skill proposals a pill counting them while hovered.
  */
-import type { ChatRequest, SessionActivity, SessionListItem } from "../../src/protocol";
+import type { ChatRequest, SearchSource, SessionActivity, SessionListItem, SessionSearchHit } from "../../src/protocol";
+import { foldText, parseQuery, termRanges } from "../../src/search-text";
 import { h, iconButton } from "../dom";
 import { icon } from "../icons";
 import { setTooltip } from "../tooltip";
+import { compactAge, FOLDED_BY_DEFAULT, previewOf, SECTIONS, type SectionId, sectionOf } from "./history-sections";
+import { SearchHelp } from "./history-search-help";
 
 type Post = (request: ChatRequest) => void;
 
-/** Chats modified within this window show without unfolding the older ones. */
-const RECENT_MS = 24 * 60 * 60 * 1000;
+/** Pause in typing before the host searches every message. */
+const SEARCH_DELAY_MS = 150;
+
+/** How a search snippet names the kind of text it comes from. */
+const SOURCE_LABELS: Record<SearchSource, string> = {
+	title: "Title",
+	prompt: "You",
+	answer: "MarIA Code",
+	thinking: "Thinking",
+	tool: "Tool",
+	output: "Output",
+	summary: "Summary",
+};
 
 export class HistoryPanel {
 	readonly element: HTMLElement;
@@ -33,22 +49,40 @@ export class HistoryPanel {
 	#noWorkspaceTab = h("button", { type: "button", className: "history-tab", role: "tab" });
 	/** Undefined until the host answers `listSessions`. */
 	#sessions: SessionListItem[] | undefined;
+	/** The rows shown, in order: what the arrow keys move through. */
 	#matches: SessionListItem[] = [];
 	#selected = 0;
+	/** Path of the selected row, so it stays selected when a chat changes section. */
+	#selectedPath: string | undefined;
 	/** Path of the row whose name is being edited. */
 	#editing: string | undefined;
 	/** The tab shown: chats without a workspace, else the workspace's. */
 	#noWorkspace = false;
 	/** Whether this opening picked its tab yet (from the first `sessions` answer). */
 	#tabPicked = false;
-	/** Whether the chats older than 24 hours are unfolded (folded again on every opening). */
-	#olderShown = false;
+	/** Folded time sections (reset on every opening). */
+	#folded = new Set<SectionId>(FOLDED_BY_DEFAULT);
 	/** Group of the chat this view shows, from its `state`; the panel opens on it. */
 	#chatNoWorkspace: boolean | undefined;
+	/** The host's matches through every message, by session file, for `#hitsQuery`. */
+	#hits = new Map<string, SessionSearchHit>();
+	/** Query `#hits` answers; undefined before the first answer of this opening. */
+	#hitsQuery: string | undefined;
+	#searchTimer = 0;
+	/** The "i" beside the search box; its examples search when clicked. */
+	#help = new SearchHelp(query => {
+		this.#search.value = query;
+		this.#search.focus();
+		this.#queryChanged();
+	});
 
+	/**
+	 * @param onFind a row opened from a search: find `text` (a match of it) in that chat once it shows
+	 */
 	constructor(
 		private readonly post: Post,
 		private readonly onModeChange: (open: boolean) => void,
+		private readonly onFind: (path: string, text: string) => void,
 	) {
 		const tabs = h(
 			"div",
@@ -56,11 +90,14 @@ export class HistoryPanel {
 			this.#workspaceTab,
 			this.#noWorkspaceTab,
 		);
-		this.element = h("div", { className: "history-panel", hidden: true }, this.#search, tabs, this.#list);
-		this.#search.addEventListener("input", () => {
-			this.#selected = 0;
-			this.#render();
-		});
+		this.element = h(
+			"div",
+			{ className: "history-panel", hidden: true },
+			h("div", { className: "history-search-row" }, this.#search, this.#help.element),
+			tabs,
+			this.#list,
+		);
+		this.#search.addEventListener("input", () => this.#queryChanged());
 		this.#search.addEventListener("keydown", event => this.#onKeyDown(event));
 		for (const [tab, noWorkspace] of [
 			[this.#workspaceTab, false],
@@ -71,7 +108,7 @@ export class HistoryPanel {
 			tab.addEventListener("click", () => {
 				if (this.#noWorkspace === noWorkspace) return;
 				this.#noWorkspace = noWorkspace;
-				this.#selected = 0;
+				this.#select(0, undefined);
 				this.#render();
 			});
 		}
@@ -95,9 +132,12 @@ export class HistoryPanel {
 		this.element.hidden = false;
 		this.#sessions = undefined;
 		this.#tabPicked = false;
-		this.#olderShown = false;
+		this.#folded = new Set(FOLDED_BY_DEFAULT);
 		this.#search.value = "";
-		this.#selected = 0;
+		window.clearTimeout(this.#searchTimer);
+		this.#hits = new Map();
+		this.#hitsQuery = undefined;
+		this.#select(0, undefined);
 		this.#render();
 		this.onModeChange(true);
 		this.post({ type: "listSessions" });
@@ -106,6 +146,7 @@ export class HistoryPanel {
 
 	close(): void {
 		if (!this.isOpen) return;
+		this.#help.close();
 		this.element.hidden = true;
 		this.onModeChange(false);
 	}
@@ -127,11 +168,11 @@ export class HistoryPanel {
 				(active
 					? active.noWorkspace
 					: !items.some(item => !item.noWorkspace) && items.some(item => item.noWorkspace));
-			const group = items.filter(item => item.noWorkspace === this.#noWorkspace);
-			const index = group.findIndex(item => item.active);
-			// The open chat stays reachable when it is older than 24 hours.
-			if (index >= 0 && group[index].modified < Date.now() - RECENT_MS) this.#olderShown = true;
-			this.#selected = Math.max(0, index);
+			if (active && active.noWorkspace === this.#noWorkspace) {
+				// The open chat stays reachable when its section starts folded.
+				this.#folded.delete(sectionOf(active, Date.now()));
+				this.#selectedPath = active.path;
+			}
 		}
 		this.#render();
 	}
@@ -151,10 +192,22 @@ export class HistoryPanel {
 		if (this.isOpen && this.#editing === undefined) this.#render();
 	}
 
-	/**
-	 * Spinner while the session runs, green dot once it finished unseen, blue arrow for
-	 * the open one; a fixed-width slot either way so every label lines up.
-	 */
+	/** The host's answer to `searchSessions`; dropped when the box no longer holds that query. */
+	setSearchResults(query: string, hits: SessionSearchHit[]): void {
+		if (query !== this.#search.value.trim()) return;
+		this.#hits = new Map(hits.map(hit => [hit.path, hit]));
+		this.#hitsQuery = query;
+		// The list just grew with the matches inside messages: start again from the top.
+		this.#select(0, undefined);
+		if (this.isOpen && this.#editing === undefined) this.#render();
+	}
+
+	#select(index: number, path: string | undefined): void {
+		this.#selected = index;
+		this.#selectedPath = path;
+	}
+
+	/** Spinner while the session runs, green dot once it finished unseen; a fixed-width slot so every name lines up. */
 	#marker(item: SessionListItem): HTMLElement {
 		const slot = h("span", { className: "history-marker" });
 		if (item.activity === "running") {
@@ -163,10 +216,6 @@ export class HistoryPanel {
 		} else if (item.activity === "done") {
 			slot.append(h("span", { className: "history-activity done" }));
 			setTooltip(slot, "Finished while you were in another session");
-		} else if (item.active) {
-			slot.append(icon("arrowRight"));
-			slot.classList.add("current");
-			setTooltip(slot, "Current chat");
 		}
 		return slot;
 	}
@@ -178,62 +227,90 @@ export class HistoryPanel {
 			this.#list.replaceChildren(h("div", { className: "history-empty" }, "Loading…"));
 			return;
 		}
-		const needle = this.#search.value.trim().toLowerCase();
-		const found = this.#sessions.filter(item =>
-			`${item.label} ${item.firstPrompt ?? ""} ${item.lastPrompt ?? ""}`.toLowerCase().includes(needle),
-		);
+		const query = this.#search.value.trim();
+		const terms = parseQuery(query);
+		const searching = terms.length > 0;
+		// The host's hits, once it answered this very query.
+		const hits = this.#hitsQuery === query ? this.#hits : undefined;
+		// Names and prompts filter at once; the host's search through every message adds its hits.
+		const pending = searching && !hits;
+		const found = searching
+			? this.#sessions.filter(item => {
+					if (hits?.has(item.path)) return true;
+					const known = foldText(`${item.label}\n${item.firstPrompt ?? ""}\n${item.lastPrompt ?? ""}`);
+					return terms.every(term => known.includes(term));
+				})
+			: this.#sessions;
 		this.#renderTabs(found);
 		const group = found.filter(item => item.noWorkspace === this.#noWorkspace);
 		if (group.length === 0) {
 			this.#matches = [];
 			const empty = this.#noWorkspace ? "No chats without a workspace yet" : "No chats in this workspace yet";
 			const inGroup = this.#sessions.some(item => item.noWorkspace === this.#noWorkspace);
-			this.#list.replaceChildren(h("div", { className: "history-empty" }, inGroup ? "No matches" : empty));
+			const message = !inGroup ? empty : pending ? "Searching all messages…" : "No matches";
+			this.#list.replaceChildren(h("div", { className: "history-empty" }, message));
 			return;
 		}
-		const cutoff = Date.now() - RECENT_MS;
-		const recent = group.filter(item => item.modified >= cutoff);
-		const older = group.filter(item => item.modified < cutoff);
-		// A search looks through every chat: its older matches show without unfolding.
-		const searching = needle !== "";
-		const olderVisible = searching || this.#olderShown;
-		this.#matches = olderVisible ? [...recent, ...older] : recent;
-		this.#selected = Math.max(0, Math.min(this.#selected, this.#matches.length - 1));
-		const rows = this.#matches.map((item, index) => this.#row(item, index));
-		const children: HTMLElement[] = [];
-		if (recent.length === 0 && !searching) {
-			children.push(h("div", { className: "history-empty" }, "No chats in the last 24 hours"));
+		const now = Date.now();
+		const bySection = new Map<SectionId, SessionListItem[]>();
+		// The host lists them newest first: each section keeps that order.
+		for (const item of group) {
+			const id = sectionOf(item, now);
+			const items = bySection.get(id);
+			if (items) items.push(item);
+			else bySection.set(id, [item]);
 		}
-		children.push(...rows.slice(0, recent.length));
-		if (older.length > 0) children.push(this.#olderDivider(older.length, searching));
-		children.push(...rows.slice(recent.length));
+		// A search looks through every chat: folded sections show their matches.
+		const children: HTMLElement[] = [];
+		this.#matches = [];
+		const rows: HTMLElement[] = [];
+		for (const { id, title } of SECTIONS) {
+			const items = bySection.get(id);
+			if (!items) continue;
+			const folded = !searching && this.#folded.has(id);
+			children.push(this.#heading(id, title, items.length, searching ? undefined : folded));
+			if (folded) continue;
+			for (const item of items) {
+				this.#matches.push(item);
+				const row = this.#row(item, now, terms, hits?.get(item.path));
+				rows.push(row);
+				children.push(row);
+			}
+		}
+		if (pending) children.push(h("div", { className: "history-empty" }, "Searching all messages…"));
+		const kept = this.#matches.findIndex(item => item.path === this.#selectedPath);
+		const index = kept >= 0 ? kept : Math.max(0, Math.min(this.#selected, this.#matches.length - 1));
+		this.#select(index, this.#matches[index]?.path);
+		rows[index]?.setAttribute("aria-selected", "true");
 		this.#list.replaceChildren(...children);
-		rows[this.#selected]?.scrollIntoView({ block: "nearest" });
+		rows[index]?.scrollIntoView({ block: "nearest" });
 		this.#list.querySelector<HTMLInputElement>(".history-rename")?.focus();
 	}
 
 	/**
-	 * Between the last 24 hours and the older chats: a button that unfolds or folds
-	 * them, or a plain label while a search shows them anyway.
+	 * Sticky section heading with its count; foldable sections fold and unfold on click
+	 * (`folded` is undefined when the section cannot fold, or while searching).
 	 */
-	#olderDivider(count: number, searching: boolean): HTMLElement {
-		const older = `${count} older chat${count === 1 ? "" : "s"}`;
-		if (searching) {
-			return h("div", { className: "history-older searching" }, h("span", null, `${older} · over 24 hours`));
+	#heading(id: SectionId, title: string, count: number, folded: boolean | undefined): HTMLElement {
+		const content = [
+			h("span", { className: "history-section-title" }, title),
+			h("span", { className: "history-section-count" }, String(count)),
+		];
+		// Running always shows unfolded: what is working stays in sight.
+		if (id === "running" || folded === undefined) {
+			return h("div", { className: `history-section ${id}`, role: "presentation" }, ...content);
 		}
 		const toggle = h(
 			"button",
-			{ type: "button", className: "history-older", ariaExpanded: String(this.#olderShown) },
-			icon(this.#olderShown ? "chevronUp" : "chevronDown"),
-			h("span", null, this.#olderShown ? "Hide older chats" : `Show ${older}`),
-			h("span", { className: "history-older-hint" }, "over 24 hours"),
+			{ type: "button", className: `history-section ${id} foldable`, ariaExpanded: String(!folded) },
+			icon(folded ? "chevronRight" : "chevronDown"),
+			...content,
 		);
 		// Keep focus in the search box, as the rows do.
 		toggle.addEventListener("mousedown", event => event.preventDefault());
 		toggle.addEventListener("click", () => {
-			this.#olderShown = !this.#olderShown;
-			// Folding hides a selected older row: go back to the newest chat.
-			if (!this.#olderShown) this.#selected = 0;
+			if (folded) this.#folded.delete(id);
+			else this.#folded.add(id);
 			this.#render();
 		});
 		return toggle;
@@ -254,9 +331,11 @@ export class HistoryPanel {
 		}
 	}
 
-	#row(item: SessionListItem, index: number): HTMLElement {
+	#row(item: SessionListItem, now: number, terms: readonly string[], hit: SessionSearchHit | undefined): HTMLElement {
 		const editing = item.path === this.#editing;
-		const label = editing ? this.#renameInput(item) : h("span", { className: "history-label" }, item.label);
+		const label = editing
+			? this.#renameInput(item)
+			: h("span", { className: "history-label" }, ...highlight(item.label, terms));
 		const rename = iconButton("pencil", "Rename", event => {
 			event.stopPropagation();
 			this.#editing = item.path;
@@ -269,13 +348,19 @@ export class HistoryPanel {
 		});
 		rename.classList.add("history-row-button");
 		remove.classList.add("history-row-button");
+		const age = h("span", { className: "history-age" }, compactAge(item.modified, now));
+		setTooltip(age, new Date(item.modified).toLocaleString());
+		const classes = ["history-row"];
+		if (item.active) classes.push("active");
+		if (item.activity === "done") classes.push("unread");
+		if (editing) classes.push("editing");
 		const row = h(
 			"div",
 			{
-				className: `history-row${item.active ? " active" : ""}${editing ? " editing" : ""}`,
+				className: classes.join(" "),
 				role: "option",
-				ariaSelected: String(index === this.#selected),
-				dataset: { tooltip: item.path },
+				ariaSelected: "false",
+				dataset: { tooltip: item.active ? `Current chat · ${item.path}` : item.path },
 			},
 			h(
 				"div",
@@ -295,11 +380,11 @@ export class HistoryPanel {
 							icon("pencil"),
 							String(item.proposals),
 						),
-				editing ? null : h("span", { className: "history-age" }, item.age),
+				editing ? null : age,
 				editing ? null : rename,
 				editing ? null : remove,
 			),
-			editing ? null : this.#prompts(item),
+			editing ? null : this.#preview(item, terms, hit),
 		);
 		// Keep focus in the search box, except when clicking into the rename field.
 		row.addEventListener("mousedown", event => {
@@ -309,27 +394,6 @@ export class HistoryPanel {
 			if (!editing) this.#open(item);
 		});
 		return row;
-	}
-
-	/** The session's first and latest prompts under its name; a single prompt says so. */
-	#prompts(item: SessionListItem): HTMLElement | null {
-		const line = (label: string, text: string) =>
-			h(
-				"div",
-				{ className: "history-prompt" },
-				h("span", { className: "history-prompt-label" }, label),
-				h("span", { className: "history-prompt-text" }, text),
-			);
-		if (item.singlePrompt && item.firstPrompt) {
-			return h("div", { className: "history-prompts" }, line("Only prompt", item.firstPrompt));
-		}
-		if (!item.firstPrompt && !item.lastPrompt) return null;
-		return h(
-			"div",
-			{ className: "history-prompts" },
-			item.firstPrompt ? line("First", item.firstPrompt) : null,
-			item.lastPrompt ? line("Last", item.lastPrompt) : null,
-		);
 	}
 
 	/** Inline name editor: Enter renames, Escape or leaving the field cancels. */
@@ -369,8 +433,60 @@ export class HistoryPanel {
 	}
 
 	#open(item: SessionListItem): void {
+		const query = this.#search.value.trim();
+		const snippet = this.#hitsQuery === query ? this.#hits.get(item.path)?.snippet : undefined;
 		this.close();
 		this.post({ type: "openSession", path: item.path });
+		// Land on the match: titles are not part of the conversation, everything else is.
+		const range = snippet?.ranges[0];
+		if (snippet && range && snippet.source !== "title")
+			this.onFind(item.path, snippet.text.slice(range[0], range[1]));
+	}
+
+	/** The search box's text changed: filter at once and ask the host to search every message once typing pauses. */
+	#queryChanged(): void {
+		this.#select(0, undefined);
+		window.clearTimeout(this.#searchTimer);
+		const query = this.#search.value.trim();
+		if (query) {
+			this.#searchTimer = window.setTimeout(() => this.post({ type: "searchSessions", query }), SEARCH_DELAY_MS);
+		}
+		this.#render();
+	}
+
+	/**
+	 * Line under the name while searching: where the host found the terms (which
+	 * kind of text, the words around them, how many more texts matched), else the
+	 * chat's latest prompt with the terms marked.
+	 */
+	#preview(item: SessionListItem, terms: readonly string[], hit: SessionSearchHit | undefined): HTMLElement | null {
+		const snippet = terms.length ? hit?.snippet : undefined;
+		if (!snippet || !hit) {
+			const preview = previewOf(item);
+			return preview ? h("div", { className: "history-preview" }, ...highlight(preview, terms)) : null;
+		}
+		const more =
+			hit.count > 1
+				? h(
+						"span",
+						{
+							className: "history-snippet-more",
+							dataset: {
+								tooltip: `${hit.count - 1} more place${hit.count === 2 ? "" : "s"} in this chat match`,
+							},
+						},
+						`+${hit.count - 1}`,
+					)
+				: null;
+		const line = h(
+			"div",
+			{ className: `history-preview history-snippet${hit.fuzzy ? " fuzzy" : ""}` },
+			h("span", { className: "history-snippet-source" }, SOURCE_LABELS[snippet.source]),
+			h("span", { className: "history-snippet-text" }, ...marked(snippet.text, snippet.ranges)),
+			more,
+		);
+		if (hit.fuzzy) setTooltip(line, "No exact match: similar words were found");
+		return line;
 	}
 
 	#onKeyDown(event: KeyboardEvent): void {
@@ -381,7 +497,8 @@ export class HistoryPanel {
 				event.preventDefault();
 				const count = this.#matches.length;
 				if (count === 0) return;
-				this.#selected = (this.#selected + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
+				const index = (this.#selected + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
+				this.#select(index, this.#matches[index].path);
 				this.#render();
 				return;
 			}
@@ -393,8 +510,27 @@ export class HistoryPanel {
 			}
 			case "Escape":
 				event.preventDefault();
-				this.close();
+				if (this.#help.isOpen) this.#help.close();
+				else this.close();
 				return;
 		}
 	}
+}
+
+/** `text` with the folded occurrences of `terms` (see search-text.ts) wrapped in `<mark>`. */
+function highlight(text: string, terms: readonly string[]): (string | HTMLElement)[] {
+	return terms.length ? marked(text, termRanges(foldText(text), terms)) : [text];
+}
+
+/** `text` with the `[start, end)` ranges (sorted, not overlapping) wrapped in `<mark>`. */
+function marked(text: string, ranges: readonly [number, number][]): (string | HTMLElement)[] {
+	const parts: (string | HTMLElement)[] = [];
+	let from = 0;
+	for (const [start, end] of ranges) {
+		if (start > from) parts.push(text.slice(from, start));
+		parts.push(h("mark", { className: "history-match" }, text.slice(start, end)));
+		from = end;
+	}
+	if (from < text.length) parts.push(text.slice(from));
+	return parts;
 }

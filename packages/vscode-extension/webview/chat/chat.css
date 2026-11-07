@@ -1364,6 +1364,38 @@ code {
 	color: var(--c-del);
 }
 
+.activity-changes {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 20px;
+	padding: 0 8px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: 10px;
+	background: transparent;
+	color: var(--c-fg-2);
+	font: inherit;
+	font-size: 11px;
+	cursor: pointer;
+}
+
+.activity-changes svg {
+	width: 12px;
+	height: 12px;
+}
+
+.activity-changes:hover,
+.activity-changes:focus-visible {
+	color: var(--omp-accent);
+	border-color: var(--omp-accent);
+	background: var(--c-hover);
+}
+
+.changes-unavailable .activity-changes {
+	display: none;
+}
+
 .activity-state {
 	flex: none;
 	font-size: var(--fs-sm);
@@ -1715,11 +1747,20 @@ code {
 	padding: 10px var(--gutter) 0;
 }
 
-.history-search {
+/* Search box and its "i" help button. */
+.history-search-row {
 	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 4px;
 	width: 100%;
 	max-width: var(--thread-max);
 	margin: 0 auto 8px;
+}
+
+.history-search {
+	flex: 1;
+	min-width: 0;
 	height: 28px;
 	padding: 0 10px;
 	border-radius: var(--r-md);
@@ -1737,6 +1778,106 @@ code {
 	color: var(--c-fg-3);
 }
 
+.history-help-anchor {
+	position: relative;
+	display: flex;
+}
+
+.history-help-toggle[aria-expanded="true"] {
+	color: var(--omp-accent);
+}
+
+/* How search works: below the "i", over the list. */
+.history-help {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 6px);
+	z-index: 10;
+	width: 340px;
+	max-width: calc(100vw - 24px);
+	max-height: calc(100vh - 80px);
+	overflow-y: auto;
+	padding: 12px;
+	border-radius: var(--r-xl);
+	border: 1px solid var(--c-border-heavy);
+	background: var(--menu-bg);
+	box-shadow: var(--menu-shadow);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	font-size: var(--fs-sm);
+	cursor: default;
+}
+
+.history-help-title {
+	font-size: var(--fs);
+	font-weight: 600;
+}
+
+.history-help-section h3,
+.history-help-subtitle {
+	margin: 0 0 4px;
+	color: var(--c-fg-3);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.history-help-section ul {
+	margin: 0;
+	padding-left: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	color: var(--c-fg-2);
+}
+
+.history-help code {
+	padding: 0 4px;
+	border-radius: var(--r-sm);
+	background: var(--c-border-heavy);
+	color: var(--c-fg);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+}
+
+.history-help-examples {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* An example query: clicking it fills the search box and searches. */
+.history-help-example {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 5px 8px;
+	border: 1px solid var(--c-border);
+	border-radius: var(--r-md);
+	background: transparent;
+	color: var(--c-fg-3);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.history-help-example:hover {
+	border-color: var(--omp-accent);
+	background: var(--c-hover);
+	color: var(--c-fg);
+}
+
+.history-help-example:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+}
+
+.history-help-example code {
+	flex: none;
+	white-space: nowrap;
+}
+
 .history-list {
 	flex: 1;
 	overflow-y: auto;
@@ -1750,16 +1891,33 @@ code {
 }
 
 .history-row {
-	padding: 6px 8px;
+	position: relative;
+	padding: 5px 8px;
 	border-radius: var(--r-md);
 	cursor: pointer;
 	min-width: 0;
 }
 
-.history-row.active,
-.history-row:hover,
-.history-row[aria-selected="true"] {
+.history-row:hover {
 	background: var(--c-hover);
+}
+
+/* Keyboard selection: a focus outline, so it never looks like the hover or the open chat. */
+.history-row[aria-selected="true"] {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+/* The open chat: an accent bar on its left edge. */
+.history-row.active::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 6px;
+	bottom: 6px;
+	width: 3px;
+	border-radius: 9999px;
+	background: var(--omp-accent);
 }
 
 .history-line {
@@ -1769,17 +1927,7 @@ code {
 	min-width: 0;
 }
 
-.history-marker.current {
-	color: var(--vscode-charts-blue, #3794ff);
-}
-
-.history-marker.current .icon {
-	width: 12px;
-	height: 12px;
-	flex: none;
-}
-
-/* Activity marks: a spinner while the session works, a green dot once it finished unseen, a blue arrow on the open one. */
+/* Activity marks: a spinner while the session works, a green dot once it finished unseen. */
 .history-marker {
 	flex: none;
 	width: 12px;
@@ -1823,8 +1971,13 @@ code {
 	text-overflow: ellipsis;
 }
 
+/* Finished while you were elsewhere: the name stands out like an unread message. */
+.history-row.unread .history-label {
+	font-weight: 600;
+}
+
 .history-age,
-.history-prompts {
+.history-preview {
 	color: var(--c-fg-3);
 	font-size: var(--fs-sm);
 }
@@ -1833,7 +1986,7 @@ code {
 	flex: none;
 }
 
-/* Skill proposals awaiting a decision, counted in the header's curation color. */
+/* Skill proposals awaiting a decision, counted in the header's curation color; shown only while the row is hovered. */
 .history-curation {
 	flex: none;
 	display: inline-flex;
@@ -1847,6 +2000,10 @@ code {
 	color: var(--omp-accent);
 	font-size: var(--fs-sm);
 	font-weight: 600;
+}
+
+.history-row:not(:hover) .history-curation {
+	display: none;
 }
 
 .history-curation .icon {
@@ -1890,26 +2047,56 @@ code {
 	outline: none;
 }
 
-/* First and last prompt under the label: past the 10px marker slot and the 8px gap. */
-.history-prompts {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	column-gap: 8px;
-	padding-left: 18px;
-}
-
-.history-prompt {
-	display: contents;
-}
-
-.history-prompt-label {
-	opacity: 0.75;
-}
-
-.history-prompt-text {
+/* Latest prompt under the name: past the 12px marker slot and the 8px gap. */
+.history-preview {
+	padding-left: 20px;
+	margin-top: 1px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.history-match {
+	background: var(--vscode-editor-findMatchHighlightBackground, color-mix(in srgb, var(--omp-accent) 30%, transparent));
+	color: inherit;
+	border-radius: 2px;
+}
+
+/* Where a search found the terms: "You" / "MarIA Code" / "Output"…, the words around them, and how many more places match. */
+.history-snippet {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+}
+
+.history-snippet-source {
+	flex: none;
+	padding: 0 5px;
+	border-radius: var(--r-sm);
+	background: var(--c-border-heavy);
+	color: var(--c-fg-2);
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.history-snippet-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.history-snippet-more {
+	flex: none;
+	font-size: 10px;
+	opacity: 0.8;
+}
+
+/* Approximate matches: the marks are underlined instead of filled. */
+.history-snippet.fuzzy .history-match {
+	background: transparent;
+	text-decoration: underline dotted;
 }
 
 .history-empty {
@@ -1917,60 +2104,65 @@ code {
 	color: var(--c-fg-3);
 }
 
-/* Unfolds the chats older than 24 hours under the recent ones; styled like the tabs above. */
-.history-older {
+/* Section heading (Needs you, Running, Today…): sticks to the top while its chats scroll under it. */
+.history-section {
+	position: sticky;
+	top: 0;
+	z-index: 1;
 	flex: none;
 	display: flex;
 	align-items: center;
-	justify-content: center;
 	gap: 6px;
+	width: 100%;
 	height: 26px;
-	margin: 6px 0;
-	padding: 0 10px;
-	border: 1px dashed var(--c-border-heavy);
-	border-radius: var(--r-md);
-	background: transparent;
+	margin-top: 8px;
+	padding: 0 8px;
+	border: none;
+	border-bottom: 1px solid var(--c-border);
+	background: var(--c-bg);
 	color: var(--c-fg-3);
 	font: inherit;
-	font-size: var(--fs-sm);
-	white-space: nowrap;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	text-align: left;
+}
+
+.history-section:first-child {
+	margin-top: 0;
+}
+
+.history-section.foldable {
 	cursor: pointer;
 }
 
-.history-older .icon {
-	width: 13px;
-	height: 13px;
-}
-
-.history-older:hover {
-	border-style: solid;
-	background: var(--c-hover);
+.history-section.foldable:hover {
 	color: var(--c-fg);
 }
 
-.history-older:focus-visible {
+.history-section.foldable:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
 }
 
-.history-older-hint {
-	opacity: 0.7;
+.history-section .icon {
+	width: 12px;
+	height: 12px;
+	flex: none;
 }
 
-.history-older-hint::before {
+.history-section.running {
+	color: var(--c-fg-2);
+}
+
+.history-section-count {
+	font-weight: 400;
+	opacity: 0.8;
+}
+
+.history-section-count::before {
 	content: "· ";
-}
-
-/* While searching the older matches show anyway: only a divider marks where they start. */
-.history-older.searching {
-	border: none;
-	border-top: 1px solid var(--c-border);
-	border-radius: 0;
-	cursor: default;
-}
-
-.history-older.searching:hover {
-	background: transparent;
-	color: var(--c-fg-3);
 }
 
 /* "This workspace" / "No workspace" filter: two separate tabs; the selected one carries the accent. */
@@ -3551,6 +3743,34 @@ code {
 	flex: 1;
 }
 
+/* omp's task list, behind the composer's task list button (webview/chat/todo-panel.ts); reuses the plan progress styles. */
+
+.todo-toggle {
+	position: relative;
+	width: 28px;
+	height: 28px;
+	border-radius: 9999px;
+}
+
+.todo-toggle[aria-expanded="true"] {
+	background: var(--c-hover);
+}
+
+.todo-badge {
+	right: -5px;
+	pointer-events: none;
+}
+
+.todo-popover {
+	left: auto;
+	right: 0;
+}
+
+.todo-note {
+	margin: 0;
+	color: var(--c-fg-3);
+}
+
 /* Plan review card */
 
 .plan-card {
@@ -3635,6 +3855,108 @@ code {
 .plan-card-status {
 	color: var(--c-fg-3);
 	font-size: var(--fs-sm);
+}
+
+/* Feedback for "Refine plan", typed or dictated (webview/chat/plan-feedback.ts). */
+
+.plan-feedback {
+	position: fixed;
+	inset: 0;
+	z-index: 200;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	background: rgb(0 0 0 / 0.55);
+	animation: lightbox-in 0.12s ease-out;
+}
+
+.plan-feedback[hidden] {
+	display: none;
+}
+
+.plan-feedback-card {
+	display: flex;
+	flex-direction: column;
+	width: min(560px, 100%);
+	max-height: 100%;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: var(--r-xl);
+	background: var(--c-surface);
+	box-shadow: 0 8px 32px rgb(0 0 0 / 0.45);
+	overflow: hidden;
+}
+
+.plan-feedback-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	padding: 4px 12px;
+	border-bottom: 1px solid var(--c-border);
+}
+
+.plan-feedback-title {
+	flex: 1;
+	min-width: 0;
+	color: var(--c-fg-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.plan-feedback-input {
+	min-height: 110px;
+	max-height: 40vh;
+	margin: 10px 12px 6px;
+	padding: 8px 10px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: var(--r-md);
+	background: var(--c-bg);
+	color: var(--c-fg);
+	font: inherit;
+	resize: vertical;
+}
+
+.plan-feedback-input:focus {
+	outline: none;
+	border-color: var(--omp-accent);
+}
+
+.plan-feedback-input::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--c-fg-3));
+}
+
+.plan-feedback .dictation-preview {
+	padding: 0 14px 6px;
+}
+
+.plan-feedback-error {
+	padding: 0 14px 6px;
+	color: var(--c-error);
+	font-size: var(--fs-sm);
+}
+
+.plan-feedback-footer {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border-top: 1px solid var(--c-border);
+}
+
+.plan-feedback-hint {
+	color: var(--c-fg-3);
+	font-size: var(--fs-sm);
+}
+
+.plan-feedback-spacer {
+	flex: 1;
+}
+
+.plan-feedback .plan-card-approve:disabled {
+	opacity: 0.5;
+	cursor: default;
 }
 
 .send-button,

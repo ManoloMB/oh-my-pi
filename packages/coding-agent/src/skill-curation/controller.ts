@@ -10,6 +10,10 @@
  * session settles (no run, queued input or background work that could resume
  * it), so goal continuations, follow-ups and job results belong to one task.
  */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type { Dirent } from "node:fs";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -33,6 +37,49 @@ import { SkillEditTool } from "./skill-edit-tool";
 
 /** Rejected proposals of a skill shown to the curator so it does not propose them again. */
 const MAX_REJECTED_SHOWN = 5;
+/** Files of a skill directory listed to the curator. */
+const MAX_FILES_SHOWN = 60;
+const SKIPPED_DIRS: Record<string, true> = { node_modules: true, __pycache__: true, venv: true };
+
+/**
+ * The files of a skill directory other than SKILL.md, relative to it,
+ * breadth-first and by name; hidden entries and dependency folders skipped, at
+ * most `MAX_FILES_SHOWN` plus a marker when there are more. The curator sees
+ * SKILL.md inline and reads these on demand: a script at fault is fixed in the script.
+ */
+async function skillFiles(skill: Skill): Promise<string[]> {
+	const files: string[] = [];
+	const pending = [""];
+	// Stop walking once past the cap: the listing only needs to know there are more.
+	while (pending.length > 0 && files.length <= MAX_FILES_SHOWN) {
+		const dir = pending.shift() ?? "";
+		let entries: Dirent[];
+		try {
+			entries = await fs.readdir(path.join(skill.baseDir, dir), { withFileTypes: true });
+		} catch (error) {
+			logger.warn("Skill curation could not list a skill folder", { skill: skill.name, dir, error: String(error) });
+			continue;
+		}
+		entries.sort((a, b) => a.name.localeCompare(b.name));
+		for (const entry of entries) {
+			if (entry.name.startsWith(".") || SKIPPED_DIRS[entry.name]) continue;
+			const relative = dir ? `${dir}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) pending.push(relative);
+			else if (entry.isFile() && path.join(skill.baseDir, relative) !== skill.filePath) files.push(relative);
+		}
+	}
+	if (files.length <= MAX_FILES_SHOWN) return files;
+	return [...files.slice(0, MAX_FILES_SHOWN), "… more files not listed"];
+}
+
+/** Whether an assistant message from `start` on calls a tool. */
+function runsTools(messages: readonly AgentMessage[], start: number): boolean {
+	for (let index = start; index < messages.length; index++) {
+		const message = messages[index];
+		if (message.role === "assistant" && message.content.some(block => block.type === "toolCall")) return true;
+	}
+	return false;
+}
 
 /**
  * The model a curation turn runs on: the `curator` model role
@@ -72,6 +119,12 @@ export class SkillCurationController {
 	readonly #runTurn: SkillCurationControllerOptions["runTurn"];
 	/** `session.messages` length when the current task's first run started. */
 	#taskStart: number | undefined;
+	/**
+	 * First message of the last task curation reviewed. A follow-up task that runs
+	 * no tool — typically the user reacting to the result ("next time ask first") —
+	 * relies on no skill itself, so it is reviewed together with that task.
+	 */
+	#reviewedTask: AgentMessage | undefined;
 	#checking = false;
 
 	constructor(options: SkillCurationControllerOptions) {
@@ -106,7 +159,7 @@ export class SkillCurationController {
 			) {
 				return;
 			}
-			const start = this.#taskStart;
+			let start = this.#taskStart;
 			this.#taskStart = undefined;
 			const messages = session.messages;
 			if (start === undefined || start > messages.length) return;
@@ -128,7 +181,15 @@ export class SkillCurationController {
 			if (contents.size === 0) return;
 			const anchors = new Map<Skill, SkillAnchors>();
 			for (const [skill, content] of contents) anchors.set(skill, skillAnchors(content));
-			const signals = collectCurationSignals(messages, start, [...contents.keys()], cwd, anchors);
+			let signals = collectCurationSignals(messages, start, [...contents.keys()], cwd, anchors);
+			if (!signals && !runsTools(messages, start) && this.#reviewedTask) {
+				const previous = messages.indexOf(this.#reviewedTask);
+				if (previous >= 0 && previous < start) {
+					start = previous;
+					signals = collectCurationSignals(messages, start, [...contents.keys()], cwd, anchors);
+				}
+			}
+			this.#reviewedTask = signals ? messages[start] : undefined;
 			// Not awaited: the next task is tracked while curation runs.
 			if (signals) void this.#curate(signals, renderTaskTranscript(messages.slice(start)), contents);
 		} catch (error) {
@@ -155,6 +216,7 @@ export class SkillCurationController {
 			} catch (error) {
 				logger.warn("Skill curation could not list proposals", { skill: skill.name, error: String(error) });
 			}
+			const files = await skillFiles(skill);
 			skills.push({
 				name: skill.name,
 				filePath: skill.filePath,
@@ -162,6 +224,8 @@ export class SkillCurationController {
 				used: `${uses.join(", ")}${matched.length > 0 ? ` (${matched.join(", ")})` : ""}`,
 				readLate,
 				earlier,
+				files,
+				hasFiles: files.length > 0,
 				pending,
 				rejected,
 				hasPending: pending.length > 0,

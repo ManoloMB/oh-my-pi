@@ -18,7 +18,8 @@ const SCHEME = "omp-skill-proposal";
 interface StoredProposal {
 	skill: string;
 	summary: string;
-	files: Array<{ path: string; relativePath: string; before: string; after: string }>;
+	/** `null`: the file does not exist on that side (created or deleted by the proposal). */
+	files: Array<{ path: string; relativePath: string; before: string | null; after: string | null }>;
 }
 
 export class SkillProposalStore implements vscode.Disposable {
@@ -141,6 +142,6 @@ export class SkillProposalStore implements vscode.Disposable {
 		const proposal = await this.#load(decodeURIComponent(rawId)).catch(() => undefined);
 		const file = proposal?.files.find(entry => entry.relativePath === decodeURIComponent(rawPath));
 		if (!file) return "";
-		return side === "before" ? file.before : file.after;
+		return (side === "before" ? file.before : file.after) ?? "";
 	}
 }

@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.30.0]
+
+### Changed
+
+- The history no longer has a "Needs you" section: finished and proposal chats go under Today, Yesterday, This week or Older by when they last changed, and a chat's skill-proposal count shows only while you hover it
+
+## [0.29.0]
+
+### Added
+
+- A task list button in the composer, shown while MarIA Code keeps a checklist for your request (the "Updated plan" rows of the chat), with a "done/total" badge that lights up while it works. Its popup lists the tasks by phase with the one in progress highlighted, blocked tasks with their reason, and a progress bar; a finished list clears at your next request. While an approved plan runs, the plan button keeps showing the same list instead
+
+## [0.28.0]
+
+### Added
+
+- A "See changes" button on every finished edit, write or notebook row of the chat opens that file in the editor with the changes of that call marked: added lines green, changed lines amber (hover shows how they were), removed lines as a red mark with "−N líneas eliminadas" (hover shows what was removed). The marks are only a view and go away when you edit or close the file; if the file changed after the call, the version it had right after the call opens read-only instead. Each call shows its own change, also after reloading the window, for calls made with file checkpoints on in chats with a workspace
+
+## [0.27.0]
+
+### Added
+
+- The history search looks through everything in your chats, not only their names and first/last prompts: every prompt, MarIA Code's answers and thinking, the commands and files of its tool calls, what those tools returned, and compaction summaries. It ignores case and accents, needs every word of the query (anywhere in the chat; `"quoted phrases"` match whole), and when a word appears in no chat (a typo) it matches similar words, marked with a dotted underline. Each result shows where it matched (You, MarIA Code, Tool, Output…), the words around it and how many more places match; opening it jumps to the match in the conversation
+- An "i" button beside the history search box explains what the search looks through, how it matches and what a result shows, with example queries you can click to try
+
+### Changed
+
+- The history is regrouped like an inbox: chats that need you (finished while you were elsewhere, or with skill proposals to decide) on top, then the running ones, then Today, Yesterday, This week and Older under sticky headings; Needs you, This week and Older start folded (their headings show how many chats they hold) and a search unfolds them. Each row now has two lines, the name (bold while unread) with a short age and the latest prompt, instead of the First/Last prompt lines; the open chat is marked by a green bar on its left, the keyboard selection by an outline, and search matches are highlighted
+
+## [0.26.0]
+
+### Changed
+
+- "Refine plan" on a proposed plan now opens a dialog to write what MarIA Code should correct or improve, with a microphone button to dictate it; sending it keeps plan mode and MarIA Code reworks the plan with that feedback. Cancel (or Esc) closes it and the plan keeps waiting for your decision. Before, the button only answered "refine" and sent nothing
+
 ## [0.25.0]
 
 ### Added

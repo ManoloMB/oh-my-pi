@@ -26,6 +26,7 @@ import { MessageEditor } from "./message-editor";
 import { SelectionReply } from "./selection-reply";
 import { hiddenNoticeElement, isSkillUpdateDetails, noticeElement, skillUpdateElement } from "./notices";
 import { PlanCard } from "./plan-card";
+import type { PlanFeedbackDialog } from "./plan-feedback";
 import { ToolCard, truncatedPre } from "./tools";
 
 type LiveEvent = RpcAgentEvent & { messageId?: string };
@@ -402,6 +403,8 @@ export class Transcript {
 		onExample: (prompt: string) => void,
 		/** "Reply" on text selected in an answer. */
 		onReply: (text: string) => void,
+		/** Asks for the feedback when a plan card's "Refine plan" is clicked. */
+		private readonly planFeedback: PlanFeedbackDialog,
 	) {
 		const chips = EXAMPLE_PROMPTS.map(prompt => button(prompt, "example", () => onExample(prompt)));
 		this.#empty = h(
@@ -539,6 +542,11 @@ export class Transcript {
 		this.#afterChange();
 	}
 
+	/** Chats without a workspace keep no file snapshots: hide "See changes". */
+	setChangesAvailable(available: boolean): void {
+		this.element.classList.toggle("changes-unavailable", !available);
+	}
+
 	/** Open or fold every thinking block; blocks rendered later follow the same state. */
 	setThinkingExpanded(expanded: boolean): void {
 		this.#thinkingExpanded = expanded;
@@ -566,7 +574,7 @@ export class Transcript {
 
 	/** Show the plan omp asks to approve; a card already shown for `review.id` is replaced. */
 	showPlanReview(review: Extract<ChatUpdate, { type: "planReview" }>): void {
-		const card = new PlanCard(review, this.post);
+		const card = new PlanCard(review, this.post, this.planFeedback);
 		const previous = this.#planCards.get(review.id);
 		if (previous?.element.isConnected) previous.element.replaceWith(card.element);
 		else this.#list.append(card.element);
@@ -675,7 +683,7 @@ export class Transcript {
 	#card(id: string): ToolCard {
 		let card = this.#tools.get(id);
 		if (!card) {
-			card = new ToolCard();
+			card = new ToolCard(undefined, id);
 			this.#tools.set(id, card);
 		}
 		return card;
@@ -950,6 +958,13 @@ export class Transcript {
 				copy.classList.add("copied");
 				setTimeout(() => copy.classList.remove("copied"), 1200);
 			});
+			return;
+		}
+		const changes = target.closest<HTMLElement>("[data-tool-changes]");
+		if (changes) {
+			// In a tool card's summary row the click would also toggle the card.
+			event.preventDefault();
+			this.post({ type: "showToolChanges", toolCallId: changes.dataset.toolChanges!, path: changes.dataset.path! });
 			return;
 		}
 		const file = target.closest<HTMLElement>("[data-file]");

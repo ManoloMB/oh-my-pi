@@ -5,9 +5,10 @@
  * agent's step list by phase, the step in progress highlighted, and buttons to
  * open the plan, stop tracking it, or start a new plan.
  */
-import type { ChatRequest, PlanRunView, TodoItem } from "../../src/protocol";
+import type { ChatRequest, PlanRunView } from "../../src/protocol";
 import { h } from "../dom";
 import { setTooltip } from "../tooltip";
+import { renderTodoBar, renderTodoList, todoCounts, todoSummary } from "./todo-view";
 
 type Post = (request: ChatRequest) => void;
 
@@ -17,26 +18,6 @@ const STATUS_LABELS: Record<PlanRunView["status"], string> = {
 	paused: "Paused",
 	done: "Completed",
 };
-
-const TASK_GLYPHS: Record<TodoItem["status"], string> = {
-	completed: "✓",
-	in_progress: "●",
-	pending: "○",
-	abandoned: "–",
-	blocked: "!",
-};
-
-const TASK_LABELS: Record<TodoItem["status"], string> = {
-	completed: "Done",
-	in_progress: "In progress",
-	pending: "Pending",
-	abandoned: "Dropped",
-	blocked: "Blocked",
-};
-
-function isClosed(task: TodoItem): boolean {
-	return task.status === "completed" || task.status === "abandoned";
-}
 
 export class PlanRunPanel {
 	readonly element: HTMLElement;
@@ -116,7 +97,7 @@ export class PlanRunPanel {
 	get title(): string {
 		const run = this.#run;
 		if (!run) return "";
-		const { done, total } = this.#counts();
+		const { done, total } = todoCounts(run.phases);
 		const steps = total > 0 ? `: ${done} of ${total} steps` : "";
 		return run.status === "done"
 			? `Plan "${run.title}" completed${steps}. Click to see it`
@@ -125,7 +106,7 @@ export class PlanRunPanel {
 
 	setRun(run: PlanRunView | null): void {
 		this.#run = run;
-		const { done, total } = this.#counts();
+		const { done, total } = todoCounts(run?.phases ?? []);
 		this.#badge.hidden = !run || total === 0;
 		this.#badge.textContent = `${done}/${total}`;
 		this.#badge.classList.toggle("active", run?.status === "running" || run?.status === "starting");
@@ -150,77 +131,22 @@ export class PlanRunPanel {
 		this.trigger.ariaExpanded = "false";
 	}
 
-	#counts(): { done: number; total: number } {
-		const tasks = this.#run?.phases.flatMap(phase => phase.tasks) ?? [];
-		return { done: tasks.filter(isClosed).length, total: tasks.length };
-	}
-
 	/** Refresh the popover; on opening, scroll the step in progress into view. */
 	#render(opening: boolean): void {
 		const run = this.#run;
 		if (!run) return;
-		const { done, total } = this.#counts();
 		this.#title.textContent = run.title;
 		setTooltip(this.#title, run.title);
 		this.#status.textContent = STATUS_LABELS[run.status];
 		this.#status.className = `plan-run-status ${run.status}`;
-		const phaseIndex = run.phases.findIndex(phase => phase.tasks.some(task => !isClosed(task)));
-		const phase = phaseIndex >= 0 ? run.phases[phaseIndex] : undefined;
 		this.#summary.textContent =
-			total === 0
+			todoCounts(run.phases).total === 0
 				? run.status === "paused"
 					? "The agent stopped before making a step list."
 					: "Preparing the steps…"
-				: [
-						`${done} of ${total} steps`,
-						phase && run.phases.length > 1 && `Phase ${phaseIndex + 1} of ${run.phases.length}: ${phase.name}`,
-					]
-						.filter(Boolean)
-						.join(" · ");
-		this.#bar.hidden = total === 0;
-		this.#barFill.style.width = `${total === 0 ? 0 : Math.round((done / total) * 100)}%`;
+				: todoSummary(run.phases, "steps");
+		renderTodoBar(this.#bar, this.#barFill, run.phases);
 		this.#openPlan.hidden = !run.planFile;
-
-		const list = this.#list;
-		const scrollTop = list.scrollTop;
-		list.replaceChildren(
-			...run.phases.map(phase =>
-				h(
-					"div",
-					{ className: "plan-run-phase" },
-					h(
-						"div",
-						{ className: "plan-run-phase-name" },
-						h("span", null, phase.name),
-						h(
-							"span",
-							{ className: "plan-run-phase-count" },
-							`${phase.tasks.filter(isClosed).length}/${phase.tasks.length}`,
-						),
-					),
-					...phase.tasks.map(task => this.#task(task)),
-				),
-			),
-		);
-		list.hidden = run.phases.length === 0;
-		list.scrollTop = scrollTop;
-		if (opening) list.querySelector(".plan-run-task.in_progress")?.scrollIntoView({ block: "nearest" });
-	}
-
-	#task(task: TodoItem): HTMLElement {
-		const element = h(
-			"div",
-			{ className: `plan-run-task ${task.status}` },
-			h("span", { className: "plan-run-glyph", ariaHidden: "true" }, TASK_GLYPHS[task.status]),
-			h(
-				"div",
-				{ className: "plan-run-task-body" },
-				h("span", null, task.content),
-				task.status === "blocked" && task.blocker && h("div", { className: "plan-run-blocker" }, task.blocker),
-			),
-		);
-		element.ariaLabel = `${TASK_LABELS[task.status]}: ${task.content}`;
-		setTooltip(element, task.details ? `${TASK_LABELS[task.status]} · ${task.details}` : TASK_LABELS[task.status]);
-		return element;
+		renderTodoList(this.#list, run.phases, opening);
 	}
 }

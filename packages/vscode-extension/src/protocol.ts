@@ -192,12 +192,9 @@ export interface SessionListItem {
 	label: string;
 	/** First line of the session's first prompt. */
 	firstPrompt?: string;
-	/** First line of its latest prompt; absent when that is the first one (see `singlePrompt`) or unknown. */
+	/** First line of its latest prompt; absent when the session has a single prompt, or unknown. */
 	lastPrompt?: string;
-	/** The session has a single prompt. */
-	singlePrompt: boolean;
-	age: string;
-	/** When the session file last changed (epoch ms); the panel folds chats older than 24 hours. */
+	/** When the session file last changed (epoch ms); the panel groups chats by its calendar day and shows their age. */
 	modified: number;
 	active: boolean;
 	activity?: SessionActivity;
@@ -205,6 +202,22 @@ export interface SessionListItem {
 	noWorkspace: boolean;
 	/** Skill proposals awaiting a decision that this session's tasks produced. */
 	proposals: number;
+}
+
+/** Kind of session text a search matched: a title, a prompt, an answer, thinking, a tool call, a tool's output, a compaction summary. */
+export type SearchSource = "title" | "prompt" | "answer" | "thinking" | "tool" | "output" | "summary";
+
+/** A session whose texts contain every term of a history search. */
+export interface SessionSearchHit {
+	path: string;
+	/** Higher when the terms are in more important texts (titles, prompts) or found as typed. */
+	score: number;
+	/** How many texts of the session matched (messages, tool calls, outputs…). */
+	count: number;
+	/** Some term was not found as typed in any session: words close to it matched instead. */
+	fuzzy: boolean;
+	/** The text where most terms were found, cut around them; `ranges` are the matches in `text`. */
+	snippet?: { source: SearchSource; text: string; ranges: [number, number][] };
 }
 
 /** Text a local slash command printed, and when (epoch ms, comparable with message timestamps). */
@@ -282,6 +295,8 @@ export type ChatUpdate =
 	| { type: "sessionActivity"; activity: Record<string, SessionActivity> }
 	/** Pending skill proposals per session file (sessions without any are absent); sent when they change. */
 	| { type: "sessionProposals"; counts: Record<string, number> }
+	/** Sessions matching a history search through all their messages (answer to `searchSessions`, best first). */
+	| { type: "sessionSearch"; query: string; hits: SessionSearchHit[] }
 	/**
 	 * omp asks to approve the plan it proposed: show it in the chat with `options`
 	 * as buttons and answer with `planDecision`. `path` is the plan file on disk.
@@ -306,7 +321,9 @@ export type ChatUpdate =
 	/** Answer to `getScopeCheckpoint`: the running request's active time and tool rounds; null when omp could not report them. */
 	| { type: "scopeCheckpoint"; stats: ScopeCheckpointStats | null }
 	/** Background jobs (async bash, task, eval) of the shown session: running first, then those settled during the current task; empty when none. */
-	| { type: "asyncJobs"; jobs: AsyncJob[] };
+	| { type: "asyncJobs"; jobs: AsyncJob[] }
+	/** omp's task list (`todo`) of the shown session, phases without tasks left out; empty when there is none (or a new task started after it finished). */
+	| { type: "todos"; phases: TodoPhase[] };
 
 /** Chat webview → host. */
 export type ChatRequest =
@@ -325,6 +342,8 @@ export type ChatRequest =
 	| { type: "newSession"; noWorkspace?: boolean }
 	/** List the sessions for the history panel; the host answers with `sessions`. */
 	| { type: "listSessions" }
+	/** Search every message of the history panel's sessions; the host answers with `sessionSearch`. */
+	| { type: "searchSessions"; query: string }
 	| { type: "openSession"; path: string }
 	/** Rename the session at `path`, or the open one when `path` is absent; the host re-sends `sessions`. */
 	| { type: "renameSession"; path?: string; name: string }
@@ -348,8 +367,8 @@ export type ChatRequest =
 	| { type: "cancelAsyncJob"; id: string }
 	/** Follow one subagent's requests (`subagentRequests`), or stop with `null`. */
 	| { type: "watchSubagent"; id: string | null }
-	/** Answer a `planReview` with one of its options. */
-	| { type: "planDecision"; id: string; value: string }
+	/** Answer a `planReview` with one of its options; `feedback` (refining) is what the user wants changed in the plan. */
+	| { type: "planDecision"; id: string; value: string; feedback?: string }
 	/** Stop tracking the approved plan's execution (the plan button turns off). */
 	| { type: "dismissPlanRun" }
 	/** Open a plan file (absolute path) rendered in an editor tab. */
@@ -368,6 +387,8 @@ export type ChatRequest =
 	| { type: "restart" }
 	/** Open a file the transcript mentions; relative paths resolve against the workspace. */
 	| { type: "openFile"; path: string; line?: number }
+	/** Open the file a tool call edited, with that call's changes marked in the editor. */
+	| { type: "showToolChanges"; toolCallId: string; path: string }
 	| { type: "openExternal"; url: string }
 	/** Remove a queued (not yet delivered) message. */
 	| { type: "removeQueued"; message: string; queue: "steering" | "followUp" }

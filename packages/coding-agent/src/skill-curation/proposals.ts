@@ -9,11 +9,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import {
-	compactSkillDiff,
+	readSkillFile,
 	SKILL_ENTRY_ID_RE,
 	type SkillHistoryEntry,
 	type SkillHistoryFile,
+	skillFileDiff,
 	skillKey,
+	writeSkillFile,
 	writeSkillHistoryEntry,
 } from "./history";
 
@@ -71,7 +73,7 @@ export function skillProposalsDir(agentDir?: string): string {
 
 /** Every changed file as `--- <relative path>` plus its compact diff. */
 export function proposalDiff(files: readonly SkillHistoryFile[]): string {
-	return files.map(file => `--- ${file.relativePath}\n${compactSkillDiff(file.before, file.after)}`).join("\n");
+	return files.map(skillFileDiff).join("\n");
 }
 
 /** Store a new pending proposal; the id stays unique across concurrent omp processes. */
@@ -93,16 +95,37 @@ export async function writeSkillProposal(
 	}
 }
 
-async function isStale(proposal: SkillProposal): Promise<boolean> {
-	for (const file of proposal.files) {
-		try {
-			if ((await Bun.file(file.path).text()) !== file.before) return true;
-		} catch (error) {
-			if (isEnoent(error)) return true;
-			throw error;
-		}
+/**
+ * What `file` becomes when the proposal is applied to `current`: its `after`
+ * when the file is still as proposed against, otherwise its replacements
+ * replayed on the current text, each still matching exactly once. Undefined
+ * when the proposal no longer applies.
+ */
+function rebaseSkillFile(file: SkillHistoryFile, current: string | null): string | null | undefined {
+	if (current === file.before) return file.after;
+	if (!file.edits || current === null) return undefined;
+	let text = current;
+	for (const edit of file.edits) {
+		if (text.split(edit.oldText).length !== 2) return undefined;
+		text = text.replace(edit.oldText, () => edit.newText);
 	}
-	return false;
+	return text;
+}
+
+/** Each file of `proposal` as it is now and as approving would leave it; undefined when one no longer applies. */
+async function planProposal(proposal: SkillProposal): Promise<SkillHistoryFile[] | undefined> {
+	const files: SkillHistoryFile[] = [];
+	for (const file of proposal.files) {
+		const current = await readSkillFile(file.path);
+		const after = rebaseSkillFile(file, current);
+		if (after === undefined) return undefined;
+		files.push({ path: file.path, relativePath: file.relativePath, before: current, after });
+	}
+	return files;
+}
+
+async function isStale(proposal: SkillProposal): Promise<boolean> {
+	return (await planProposal(proposal)) === undefined;
 }
 
 /** Proposals newest first; pending ones by default. */
@@ -170,33 +193,26 @@ async function loadPending(id: string, agentDir?: string): Promise<{ proposal: S
 }
 
 /**
- * Apply proposal `id` and record it in the skill history. Refuses, writing
- * nothing, when it is unknown or decided, or when a file changed since it was
- * proposed.
+ * Apply proposal `id` and record it in the skill history. A file changed since
+ * the proposal still takes its replacements when each one still matches exactly
+ * once. Refuses, writing nothing, when it is unknown or decided, or when a
+ * changed file no longer takes them.
  */
 export async function approveSkillProposal(
 	id: string,
 	agentDir?: string,
 ): Promise<{ proposal: SkillProposal; history: SkillHistoryEntry }> {
 	const { proposal, file } = await loadPending(id, agentDir);
-	const changed: string[] = [];
-	for (const entry of proposal.files) {
-		let current: string | undefined;
-		try {
-			current = await Bun.file(entry.path).text();
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
+	const files = await planProposal(proposal);
+	if (!files) {
+		const changed: string[] = [];
+		for (const entry of proposal.files) {
+			if (rebaseSkillFile(entry, await readSkillFile(entry.path)) === undefined) changed.push(entry.relativePath);
 		}
-		if (current !== entry.before) changed.push(entry.relativePath);
-	}
-	if (changed.length > 0) {
 		throw new Error(`outdated: the skill changed since this proposal (${changed.join(", ")})`);
 	}
-	for (const entry of proposal.files) await Bun.write(entry.path, entry.after);
-	const history = await writeSkillHistoryEntry(
-		{ skill: proposal.skill, summary: proposal.summary, files: proposal.files },
-		agentDir,
-	);
+	for (const entry of files) await writeSkillFile(entry.path, entry.after);
+	const history = await writeSkillHistoryEntry({ skill: proposal.skill, summary: proposal.summary, files }, agentDir);
 	proposal.status = "approved";
 	proposal.decidedAt = Date.now();
 	proposal.historyId = history.id;

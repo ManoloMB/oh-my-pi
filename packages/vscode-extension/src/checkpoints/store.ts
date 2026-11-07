@@ -13,6 +13,13 @@ export interface RepoCheckpoint extends TurnSnapshots {
 	root: string;
 }
 
+/** The work tree right after one of omp's tool calls that can change files. */
+export interface CallSnapshot {
+	toolCallId: string;
+	/** Snapshot tree per repository root (repositories whose snapshot failed are absent). */
+	trees: Array<{ root: string; tree: string }>;
+}
+
 /** The snapshots around one of omp's turns, keyed by the prompt that started it. */
 export interface Checkpoint {
 	/** `timestamp` of the user message that started the turn (as stored in the session). */
@@ -23,6 +30,8 @@ export interface Checkpoint {
 	 * Absent in checkpoints saved before it was tracked.
 	 */
 	editedFiles?: boolean;
+	/** Snapshots after each file-changing tool call of the turn, in order; absent before this was tracked. */
+	calls?: CallSnapshot[];
 }
 
 export class CheckpointStore {
@@ -53,8 +62,31 @@ export class CheckpointStore {
 
 function isCheckpoint(value: unknown): value is Checkpoint {
 	if (!value || typeof value !== "object" || !("promptTimestamp" in value) || !("repos" in value)) return false;
+	if (
+		typeof value.promptTimestamp !== "number" ||
+		!Array.isArray(value.repos) ||
+		!value.repos.every(isRepoCheckpoint)
+	) {
+		return false;
+	}
 	return (
-		typeof value.promptTimestamp === "number" && Array.isArray(value.repos) && value.repos.every(isRepoCheckpoint)
+		!("calls" in value) ||
+		value.calls === undefined ||
+		(Array.isArray(value.calls) && value.calls.every(isCallSnapshot))
+	);
+}
+
+function isCallSnapshot(value: unknown): value is CallSnapshot {
+	if (!value || typeof value !== "object" || !("toolCallId" in value) || !("trees" in value)) return false;
+	if (typeof value.toolCallId !== "string" || !Array.isArray(value.trees)) return false;
+	return value.trees.every(
+		(entry: unknown) =>
+			!!entry &&
+			typeof entry === "object" &&
+			"root" in entry &&
+			"tree" in entry &&
+			typeof entry.root === "string" &&
+			typeof entry.tree === "string",
 	);
 }
 

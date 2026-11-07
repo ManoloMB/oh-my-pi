@@ -1,6 +1,6 @@
 {
 	"extends": "../../../tsconfig.base.json",
-	"include": [".", "../src/protocol.ts", "../src/quoted-prompt.ts"],
+	"include": [".", "../src/protocol.ts", "../src/quoted-prompt.ts", "../src/search-text.ts"],
 	"compilerOptions": {
 		"lib": ["ES2024", "DOM", "DOM.Iterable"],
 		"types": ["assets"]

@@ -31,6 +31,9 @@ const FAMILY_ICONS: Record<ToolFamily, IconName> = {
 	other: "wrench",
 };
 
+/** File tools whose finished rows offer "See changes". */
+const CHANGE_TOOLS: Record<string, true> = { edit: true, write: true, notebook: true, ast_edit: true };
+
 /** File subjects open in the editor; web URLs open in the browser (the transcript handles `data-href`). */
 function subjectContent(subject: ActivitySubject): Node | string {
 	if (subject.path) return fileLink(subject.path, subject.text);
@@ -109,7 +112,11 @@ export class ToolCard {
 	#purpose: string | undefined;
 	#diff: DiffStats | undefined;
 
-	constructor(private readonly label?: string) {
+	constructor(
+		private readonly label?: string,
+		/** Set for the agent's own calls: their finished file edits offer "See changes". */
+		private readonly toolCallId?: string,
+	) {
 		this.element = h(
 			"details",
 			{ className: "activity" },
@@ -205,6 +212,20 @@ export class ToolCard {
 		}
 		if (status === "error") children.push(h("span", { className: "activity-state error" }, "Failed"));
 		else if (status === "interrupted") children.push(h("span", { className: "activity-state" }, "Stopped"));
+		if (this.toolCallId && status === "done" && CHANGE_TOOLS[(this.#name || "").toLowerCase()] && subject?.path) {
+			const changes = h(
+				"button",
+				{
+					type: "button",
+					className: "activity-changes",
+					dataset: { toolChanges: this.toolCallId, path: subject.path },
+				},
+				icon("fileDiff"),
+				"See changes",
+			);
+			setTooltip(changes, "Open the file in the editor with this call's changes highlighted");
+			children.push(changes);
+		}
 		children.push(h("span", { className: "activity-chevron" }, icon("chevronRight")));
 		const line = h("div", { className: "activity-line" }, ...children);
 		// Run rows titled by their intent show the command beneath, indented under the name.

@@ -26,7 +26,8 @@ import {
 	undoRestore,
 	type WrittenFile,
 } from "../checkpoints/snapshots";
-import type { CheckpointStore, RepoCheckpoint } from "../checkpoints/store";
+import type { CallSnapshot, CheckpointStore, RepoCheckpoint } from "../checkpoints/store";
+import { type CallChangesResult, callChanges } from "../editor-changes/call-changes";
 import type { CommandOutputStore } from "./command-outputs";
 import { playCompletionSound } from "../sounds";
 import { ompCommand, readConfig, workspaceCwd, workspaceRoots } from "../config";
@@ -44,6 +45,7 @@ import {
 import { OmpCommandError, OmpProcess, type OmpResult } from "../rpc/omp-process";
 import { AsyncJobRoster } from "./async-job-roster";
 import { PlanRunTracker } from "./plan-run";
+import { TodoListTracker } from "./todo-list";
 import { userPrompt } from "./prompt-entries";
 import { SubagentRequestLog } from "./subagent-requests";
 import { SubagentRoster } from "./subagent-roster";
@@ -52,6 +54,8 @@ import { SubagentRoster } from "./subagent-roster";
 const WATCH_POLL_MS = 2000;
 /** How often omp's background jobs are re-read while one runs (omp pushes no job frames). */
 const JOBS_POLL_MS = 2000;
+/** Tools besides omp's file editors that can change files: a snapshot after each keeps the next edit's change its own. */
+const SNAPSHOT_AFTER_TOOLS: Record<string, true> = { bash: true, shell: true, python: true, eval: true, task: true };
 
 /** How each scope checkpoint level is named in the chat's notices. */
 const SCOPE_CHECKPOINT_NAMES: Record<ScopeCheckpointLevel, string> = {
@@ -127,6 +131,12 @@ interface TurnCheckpoint {
 	discarded: boolean;
 	promptTimestamp?: number;
 	editedFiles: boolean;
+	/** Snapshots after each file-changing tool call, in order. */
+	calls: CallSnapshot[];
+	/** Tool calls (by id) that get a snapshot when they end. */
+	snapshotCalls: Set<string>;
+	/** Chain of those snapshots, in order; never rejects. */
+	callWork: Promise<void>;
 }
 
 /** Files involved in editing a prompt (absolute paths). */
@@ -217,6 +227,8 @@ export class AgentHost implements vscode.Disposable {
 	#postedPlanRun = "null";
 	/** The run the user stopped tracking; a view attaching rebuilds from the transcript and must not revive it. */
 	#dismissedPlanRun: string | undefined;
+	/** omp's task list of the shown session, folded from the transcript, for the composer's task list button. */
+	readonly #todos = new TodoListTracker();
 	readonly #onDidChange = new vscode.EventEmitter<AgentHost>();
 	/** Fires when the process, session, title, model, busy or settled state changes. */
 	readonly onDidChange = this.#onDidChange.event;
@@ -499,6 +511,26 @@ export class AgentHost implements vscode.Disposable {
 		return skipped.flat();
 	}
 
+	/** What tool call `toolCallId` changed in `file` (as the chat row names it); undefined when no snapshot of that call exists. */
+	async toolChanges(toolCallId: string, file: string): Promise<CallChangesResult | undefined> {
+		const target = await realTarget(path.isAbsolute(file) ? file : path.resolve(workspaceCwd(), file));
+		const now = (root: string) => snapshotTree(root);
+		const turn = this.#turn;
+		if (turn?.snapshotCalls.has(toolCallId)) {
+			await turn.callWork;
+			return callChanges(turn, toolCallId, target, now);
+		}
+		const sessionFile = this.sessionFile;
+		if (!this.checkpoints || !sessionFile) return undefined;
+		await this.#checkpointWork;
+		const entries = (await this.checkpoints.load(sessionFile)).sort((a, b) => b.promptTimestamp - a.promptTimestamp);
+		for (const entry of entries) {
+			const result = await callChanges(entry, toolCallId, target, now);
+			if (result) return result;
+		}
+		return undefined;
+	}
+
 	async removeQueued(message: string, queue: "steering" | "followUp"): Promise<void> {
 		await this.#requireProcess().request("remove_queued_message", { message, queue });
 	}
@@ -676,12 +708,20 @@ export class AgentHost implements vscode.Disposable {
 		void process.request("predict_word_feedback", { text, cursor, suggestion, accepted }).catch(() => {});
 	}
 
-	/** Answer a plan review shown in a view. */
-	decidePlan(id: string, value: string): void {
+	/**
+	 * Answer a plan review shown in a view. Refinement `feedback` is queued as
+	 * steering before the answer: the `xd://propose` call is still waiting on it,
+	 * so the feedback lands right after its "refinement requested" result.
+	 */
+	async decidePlan(id: string, value: string, feedback?: string): Promise<void> {
 		const review = this.#planReviews.get(id);
 		this.#planReviews.delete(id);
 		this.#reviewedPlanFile = review?.update.path;
-		review?.resolve(value);
+		try {
+			if (review && feedback?.trim()) await this.#requireProcess().request("steer", { message: feedback });
+		} finally {
+			review?.resolve(value);
+		}
 	}
 
 	/** The executing plan for the views; hidden while plan mode is on (the button is busy planning). */
@@ -771,6 +811,9 @@ export class AgentHost implements vscode.Disposable {
 			ready: false,
 			discarded: false,
 			editedFiles: false,
+			calls: [],
+			snapshotCalls: new Set(),
+			callWork: Promise.resolve(),
 		};
 		turn.snapshot = this.#snapshotRepos().then(repos => {
 			if (repos) turn.repos = repos;
@@ -821,6 +864,28 @@ export class AgentHost implements vscode.Disposable {
 				);
 			}
 			if (editsFiles(frame.toolName, frame.args)) turn.editedFiles = true;
+			if (editsFiles(frame.toolName, frame.args) || SNAPSHOT_AFTER_TOOLS[frame.toolName]) {
+				turn.snapshotCalls.add(frame.toolCallId);
+			}
+		} else if (frame.type === "tool_execution_end" && turn.snapshotCalls.has(frame.toolCallId)) {
+			const toolCallId = frame.toolCallId;
+			// Taken as the frame arrives: the snapshot is the disk right after the call, the chain keeps the order.
+			turn.callWork = turn.callWork.then(async () => {
+				await turn.snapshot;
+				if (turn.discarded) return;
+				const trees = await Promise.all(
+					turn.repos.map(repo =>
+						snapshotTree(repo.root).then(
+							tree => ({ root: repo.root, tree }),
+							error => {
+								this.log.appendLine(`[checkpoint] ${repo.root}: ${errorMessage(error)}`);
+								return undefined;
+							},
+						),
+					),
+				);
+				turn.calls.push({ toolCallId, trees: trees.filter(tree => tree !== undefined) });
+			});
 		} else if (
 			(frame.type === "message_start" || frame.type === "message_end") &&
 			turn.promptTimestamp === undefined
@@ -832,7 +897,12 @@ export class AgentHost implements vscode.Disposable {
 			this.#queueCheckpointWork(async () => {
 				await turn.snapshot;
 				if (turn.discarded) return;
-				await store.put(turn.sessionFile, { promptTimestamp, repos: turn.repos, editedFiles: turn.editedFiles });
+				await store.put(turn.sessionFile, {
+					promptTimestamp,
+					repos: turn.repos,
+					editedFiles: turn.editedFiles,
+					calls: turn.calls,
+				});
 			});
 		} else if (frame.type === "agent_end") {
 			this.#turn = undefined;
@@ -840,6 +910,7 @@ export class AgentHost implements vscode.Disposable {
 			if (promptTimestamp === undefined) return;
 			this.#queueCheckpointWork(async () => {
 				await turn.snapshot;
+				await turn.callWork;
 				if (turn.discarded) return;
 				const repos = await Promise.all(
 					turn.repos.map(async repo => ({
@@ -847,7 +918,12 @@ export class AgentHost implements vscode.Disposable {
 						after: await snapshotTree(repo.root).catch(() => undefined),
 					})),
 				);
-				await store.put(turn.sessionFile, { promptTimestamp, repos, editedFiles: turn.editedFiles });
+				await store.put(turn.sessionFile, {
+					promptTimestamp,
+					repos,
+					editedFiles: turn.editedFiles,
+					calls: turn.calls,
+				});
 			});
 		}
 	}
@@ -1087,6 +1163,9 @@ export class AgentHost implements vscode.Disposable {
 				this.#reviewedPlanFile = undefined;
 			}
 		}
+		if (frame.type === "message_end" && this.#todos.apply(frame.message)) {
+			this.post({ type: "todos", phases: this.#todos.phases });
+		}
 		if (frame.type === "message_end" || frame.type === "agent_start" || frame.type === "agent_end") {
 			this.#postPlanRun();
 		}
@@ -1261,6 +1340,8 @@ export class AgentHost implements vscode.Disposable {
 		const run = this.#planRunView();
 		this.#postedPlanRun = JSON.stringify(run);
 		this.post({ type: "planRun", run });
+		this.#todos.load(messages);
+		this.post({ type: "todos", phases: this.#todos.phases });
 		const [commands] = await Promise.all([
 			process.request("get_available_commands").catch(() => undefined),
 			this.#sendThinkingLevels(targets).catch(error => this.log.appendLine(String(error))),
@@ -1295,6 +1376,19 @@ export class AgentHost implements vscode.Disposable {
 
 export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** `file` with symlinks resolved as repository roots are (`discoverRepos`); a deleted file resolves through its folder. */
+async function realTarget(file: string): Promise<string> {
+	try {
+		return await fs.realpath(file);
+	} catch {
+		try {
+			return path.join(await fs.realpath(path.dirname(file)), path.basename(file));
+		} catch {
+			return file;
+		}
+	}
 }
 
 /** omp's tools that write files directly; the `lsp` tool only when it applies a rename or code action. */

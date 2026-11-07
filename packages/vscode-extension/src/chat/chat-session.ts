@@ -16,7 +16,8 @@ import { agentDir, readConfig, workspaceCwd } from "../config";
 import type { AgentStatus, ChatRequest, ChatUpdate, ModelChoice } from "../protocol";
 import { OmpCommandError, type OmpProcess } from "../rpc/omp-process";
 import { renameStoredSession } from "../sessions/rename";
-import { guessSessionDir, listSessions, relativeTime, sessionLabel } from "../sessions/session-store";
+import { sessionSearch } from "../sessions/session-search";
+import { guessSessionDir, listSessions, sessionLabel } from "../sessions/session-store";
 import { isNoWorkspaceSession, noWorkspaceFolder, noWorkspaceSessionDir } from "../no-workspace";
 import { runOmp } from "../settings/settings-panel";
 import type { SkillProposalStore } from "../skills/proposals";
@@ -67,6 +68,8 @@ export class ChatSession implements vscode.Disposable, HostView {
 			attachFiles(session: ChatSession): void;
 			/** Asks for confirmation; resolves once the session is deleted or the user declined. */
 			deleteSession(sessionFile: string, label: string): Promise<void>;
+			/** Opens the file with the tool call's changes marked. */
+			showToolChanges(session: ChatSession, toolCallId: string, path: string): Promise<void>;
 		},
 		readonly pool: AgentPool,
 		/** Pending skill proposals of every session; the header shows the shown session's. */
@@ -390,18 +393,24 @@ export class ChatSession implements vscode.Disposable, HostView {
 		}
 	}
 
+	/** Session directories the history panel lists: the workspace's, then the chats without a workspace. */
+	async #sessionDirs(): Promise<[string, string]> {
+		const current = this.state?.sessionFile;
+		const currentDir = current && path.dirname(current);
+		const sessionsRoot = path.join(agentDir(), "sessions");
+		return Promise.all([
+			currentDir && !this.#host?.noWorkspace ? currentDir : guessSessionDir(sessionsRoot, workspaceCwd()),
+			currentDir && this.#host?.noWorkspace ? currentDir : noWorkspaceSessionDir(),
+		]);
+	}
+
 	/**
 	 * The history panel's sessions, newest first: the workspace's, then the chats
 	 * without a workspace, with what each is doing.
 	 */
 	async #postSessions(): Promise<void> {
 		const current = this.state?.sessionFile;
-		const currentDir = current && path.dirname(current);
-		const sessionsRoot = path.join(agentDir(), "sessions");
-		const [workspaceDir, noWorkspaceDir] = await Promise.all([
-			currentDir && !this.#host?.noWorkspace ? currentDir : guessSessionDir(sessionsRoot, workspaceCwd()),
-			currentDir && this.#host?.noWorkspace ? currentDir : noWorkspaceSessionDir(),
-		]);
+		const [workspaceDir, noWorkspaceDir] = await this.#sessionDirs();
 		const groups = await Promise.all(
 			[workspaceDir, noWorkspaceDir].map(async (dir, index) => ({
 				noWorkspace: index === 1,
@@ -419,8 +428,6 @@ export class ChatSession implements vscode.Disposable, HostView {
 					label: sessionLabel(session),
 					firstPrompt: session.firstMessage,
 					lastPrompt: session.singlePrompt ? undefined : session.lastMessage,
-					singlePrompt: session.singlePrompt,
-					age: relativeTime(session.modified),
 					modified: session.modified.getTime(),
 					active: session.path === current,
 					activity: activity[session.path],
@@ -459,6 +466,11 @@ export class ChatSession implements vscode.Disposable, HostView {
 			case "listSessions":
 				await this.#postSessions();
 				return;
+			case "searchSessions": {
+				const hits = await sessionSearch.search(await this.#sessionDirs(), request.query);
+				this.post({ type: "sessionSearch", query: request.query, hits });
+				return;
+			}
 			case "openSession":
 				await this.switchSession(request.path);
 				return;
@@ -538,7 +550,7 @@ export class ChatSession implements vscode.Disposable, HostView {
 				await this.restart();
 				return;
 			case "planDecision":
-				this.#host?.decidePlan(request.id, request.value);
+				await this.#host?.decidePlan(request.id, request.value, request.feedback);
 				return;
 			case "dismissPlanRun":
 				this.#host?.dismissPlanRun();
@@ -581,6 +593,9 @@ export class ChatSession implements vscode.Disposable, HostView {
 					noWorkspace: this.#host?.noWorkspace ?? false,
 					sessionFile: this.state?.sessionFile,
 				});
+				return;
+			case "showToolChanges":
+				await this.commands.showToolChanges(this, request.toolCallId, request.path);
 				return;
 			case "openExternal":
 				await vscode.env.openExternal(vscode.Uri.parse(request.url, true));

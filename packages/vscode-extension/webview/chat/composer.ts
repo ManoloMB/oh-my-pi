@@ -16,6 +16,7 @@ import type {
 	SessionState,
 	SessionStats,
 	SubagentView,
+	TodoPhase,
 } from "../../src/protocol";
 import { parseQuotedPrompt, quotedPrompt } from "../../src/quoted-prompt";
 import { button, h, iconButton } from "../dom";
@@ -30,6 +31,7 @@ import { ModelPicker } from "./model-picker";
 import { PlanRunPanel } from "./plan-run-panel";
 import { ScopeCheckpointPanel } from "./scope-checkpoint";
 import { AsyncJobsPanel } from "./async-jobs";
+import { TodoPanel } from "./todo-panel";
 import type { PromptRecall } from "./transcript";
 import { SubagentPanel } from "./subagent-panel";
 
@@ -100,6 +102,7 @@ export class Composer {
 	#meter: ContextMeter;
 	#scopeCheckpoint: ScopeCheckpointPanel;
 	#asyncJobs: AsyncJobsPanel;
+	#todos = new TodoPanel();
 	#cleanupOffer: CleanupOffer;
 	#thinkingToggle: HTMLButtonElement;
 	#thinkingExpanded = false;
@@ -224,6 +227,7 @@ export class Composer {
 						{ className: "composer-footer-right" },
 						this.#meter.element,
 						this.#dictation.element,
+						this.#todos.element,
 						this.#asyncJobs.element,
 						this.#scopeCheckpoint.element,
 						this.#stop,
@@ -239,6 +243,7 @@ export class Composer {
 		this.#busy = busy;
 		this.#meter.setBusy(busy);
 		this.#scopeCheckpoint.setBusy(busy);
+		this.#todos.setBusy(busy);
 		this.#cleanupOffer.setBusy(busy);
 		this.#refresh();
 	}
@@ -263,6 +268,11 @@ export class Composer {
 	/** The chat's background jobs (`asyncJobs`), for the background tasks button. */
 	setAsyncJobs(jobs: AsyncJob[]): void {
 		this.#asyncJobs.setJobs(jobs);
+	}
+
+	/** omp's task list (`todos`), for the task list button. */
+	setTodos(phases: TodoPhase[]): void {
+		this.#todos.setPhases(phases);
 	}
 
 	setCommands(commands: AvailableSlashCommand[]): void {
@@ -298,6 +308,7 @@ export class Composer {
 	setPlanRun(run: PlanRunView | null): void {
 		this.#planRun.setRun(run);
 		this.#renderPlanToggle();
+		this.#todos.setSuppressed(this.#planRun.active);
 	}
 
 	/** omp's commands plus the local ones it does not offer itself. */
@@ -430,6 +441,11 @@ export class Composer {
 	/** "Toggle Voice Input" from the command palette or a keybinding. */
 	toggleDictation(): void {
 		this.#dictation.toggle();
+	}
+
+	/** Drop a recording in progress (another surface takes the microphone). */
+	cancelDictation(): void {
+		this.#dictation.cancel();
 	}
 
 	/** omp's dictation state; `text` is a streaming model's running transcript. */

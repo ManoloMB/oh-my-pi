@@ -7,9 +7,7 @@
  * prompt sent once every step is closed starts a new task and ends the run.
  */
 import { type AgentMessage, isUserPrompt, type PlanRunView, type TodoPhase } from "../protocol";
-
-/** omp's step-list tool (`todo_write` in older sessions). */
-const TODO_TOOLS: Record<string, true> = { todo: true, todo_write: true };
+import { allTodosClosed, todoPhasesOf } from "./todo-list";
 
 interface PlanRun {
 	/** The approving tool call, which identifies the run across reloads. */
@@ -53,8 +51,9 @@ export class PlanRunTracker {
 				this.#run = { id: message.toolCallId, title: approval.title, phases: undefined };
 				return true;
 			}
-			if (this.#run && TODO_TOOLS[message.toolName] && Array.isArray(details?.phases)) {
-				this.#run.phases = details.phases as TodoPhase[];
+			const phases = this.#run && todoPhasesOf(message);
+			if (this.#run && phases) {
+				this.#run.phases = phases;
 				return true;
 			}
 			return false;
@@ -78,7 +77,6 @@ export class PlanRunTracker {
 	}
 
 	#complete(): boolean {
-		const tasks = this.#run?.phases?.flatMap(phase => phase.tasks) ?? [];
-		return tasks.length > 0 && tasks.every(task => task.status === "completed" || task.status === "abandoned");
+		return allTodosClosed(this.#run?.phases);
 	}
 }

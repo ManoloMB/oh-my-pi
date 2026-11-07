@@ -13,8 +13,21 @@ export interface SkillHistoryFile {
 	path: string;
 	/** Path relative to the skill directory. */
 	relativePath: string;
-	before: string;
-	after: string;
+	/** `null`: the file did not exist (the edit created it). */
+	before: string | null;
+	/** `null`: the edit deleted the file. */
+	after: string | null;
+	/**
+	 * The exact replacements that turned `before` into `after`, in order; absent
+	 * when the change also rewrote, created or deleted the file. Lets a proposal
+	 * still apply after another approved change touched other parts of the file.
+	 */
+	edits?: SkillTextEdit[];
+}
+
+export interface SkillTextEdit {
+	oldText: string;
+	newText: string;
 }
 
 export interface SkillHistoryEntry {
@@ -98,9 +111,7 @@ export async function listSkillHistory(
 		createdAt: entry.createdAt,
 		summary: entry.summary,
 		files: entry.files.map(file => file.relativePath),
-		diff: entry.files
-			.map(file => `--- ${file.relativePath}\n${compactSkillDiff(file.before, file.after)}`)
-			.join("\n"),
+		diff: entry.files.map(skillFileDiff).join("\n"),
 		...(entry.revertedAt !== undefined && { revertedAt: entry.revertedAt }),
 	}));
 }
@@ -138,19 +149,43 @@ export async function revertSkillHistoryEntry(id: string, agentDir?: string): Pr
 	if (entry.revertedAt !== undefined) throw new Error(`already reverted: ${id}`);
 	const changed: string[] = [];
 	for (const file of entry.files) {
-		let current: string | undefined;
-		try {
-			current = await Bun.file(file.path).text();
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-		}
-		if (current !== file.after) changed.push(file.relativePath);
+		if ((await readSkillFile(file.path)) !== file.after) changed.push(file.relativePath);
 	}
 	if (changed.length > 0) throw new Error(`changed since the update: ${changed.join(", ")}`);
-	for (const file of entry.files) await Bun.write(file.path, file.before);
+	for (const file of entry.files) await writeSkillFile(file.path, file.before);
 	entry.revertedAt = Date.now();
 	await Bun.write(entryPath, JSON.stringify(entry, null, 2));
 	return entry;
+}
+
+/** A skill file's content, or `null` when it does not exist. */
+export async function readSkillFile(filePath: string): Promise<string | null> {
+	try {
+		return await Bun.file(filePath).text();
+	} catch (error) {
+		if (isEnoent(error)) return null;
+		throw error;
+	}
+}
+
+/**
+ * Give a skill file `content`; `null` deletes it. A file this creates that
+ * starts with a shebang is made executable, since skills run their scripts.
+ */
+export async function writeSkillFile(filePath: string, content: string | null): Promise<void> {
+	if (content === null) {
+		await fs.rm(filePath, { force: true });
+		return;
+	}
+	const created = (await readSkillFile(filePath)) === null;
+	await Bun.write(filePath, content);
+	if (created && content.startsWith("#!")) await fs.chmod(filePath, 0o755);
+}
+
+/** `--- <relative path>` (marked when created or deleted) plus the file's compact diff. */
+export function skillFileDiff(file: SkillHistoryFile): string {
+	const mark = file.before === null ? " (new file)" : file.after === null ? " (deleted)" : "";
+	return `--- ${file.relativePath}${mark}\n${compactSkillDiff(file.before ?? "", file.after ?? "")}`;
 }
 
 /** Changed lines (`- `/`+ `) with two lines of context, `…` between hunks, at most 80 lines. */

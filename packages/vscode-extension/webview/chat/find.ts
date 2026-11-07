@@ -38,6 +38,8 @@ export class FindBar {
 	#timer = 0;
 	/** What had focus before the bar opened, to return to on close. */
 	#returnFocus: HTMLElement | null = null;
+	/** Set by `openWith`: move to the first match as soon as the conversation shows one. */
+	#jumpPending = false;
 
 	/**
 	 * @param root the conversation to search
@@ -90,10 +92,22 @@ export class FindBar {
 		this.#input.select();
 	}
 
+	/**
+	 * Show the bar searching `text` (a match a history search found in this chat)
+	 * and move to its first match, waiting for it while the conversation loads.
+	 */
+	openWith(text: string): void {
+		this.#input.value = text;
+		this.#jumpPending = true;
+		if (this.isOpen) this.#search(true);
+		this.open();
+	}
+
 	close(): void {
 		if (!this.isOpen) return;
 		this.element.hidden = true;
 		this.#observer.disconnect();
+		this.#jumpPending = false;
 		window.clearTimeout(this.#timer);
 		this.#ranges = [];
 		this.#current = -1;
@@ -116,6 +130,7 @@ export class FindBar {
 		const query = this.#input.value.toLowerCase();
 		this.#ranges = query ? findRanges(this.root, query) : [];
 		if (this.#ranges.length === 0) this.#current = -1;
+		else if (this.#jumpPending) this.#current = 0;
 		else if (jump || this.#current < 0) {
 			const top = this.scroller.getBoundingClientRect().top;
 			const below = this.#ranges.findIndex(range => range.getBoundingClientRect().bottom >= top);
@@ -124,7 +139,10 @@ export class FindBar {
 			this.#current = Math.min(this.#current, this.#ranges.length - 1);
 		}
 		this.#paint();
-		if (jump && this.#current >= 0) this.#reveal(this.#ranges[this.#current]!);
+		if ((jump || this.#jumpPending) && this.#current >= 0) {
+			this.#jumpPending = false;
+			this.#reveal(this.#ranges[this.#current]!);
+		}
 	}
 
 	#step(direction: 1 | -1): void {
