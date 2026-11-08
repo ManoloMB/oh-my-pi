@@ -229,6 +229,12 @@ export class AgentHost implements vscode.Disposable {
 	#dismissedPlanRun: string | undefined;
 	/** omp's task list of the shown session, folded from the transcript, for the composer's task list button. */
 	readonly #todos = new TodoListTracker();
+	/** Delegate mode as last requested or read; a prompt sent while on makes its task delegated. */
+	#delegateOn = false;
+	/** A prompt went out in delegate mode: the mode turns off once that task settles (one task per activation). */
+	#delegatedTask = false;
+	/** Sequence of `get_state` reads: an older read answering after a newer one is dropped. */
+	#stateReads = 0;
 	readonly #onDidChange = new vscode.EventEmitter<AgentHost>();
 	/** Fires when the process, session, title, model, busy or settled state changes. */
 	readonly onDidChange = this.#onDidChange.event;
@@ -341,6 +347,7 @@ export class AgentHost implements vscode.Disposable {
 		this.#process = process;
 		this.#busy = false;
 		this.#settled = true;
+		this.#delegatedTask = false;
 		this.#setStatus({ phase: "starting" });
 		this.#resetSubagents();
 		this.#resetJobs();
@@ -441,6 +448,7 @@ export class AgentHost implements vscode.Disposable {
 			if (this.#subagents.clearFinished()) this.#postSubagents();
 			if (this.#jobs.clearFinished()) this.#postJobs();
 		}
+		if (this.#delegateOn) this.#delegatedTask = true;
 		await process.request("prompt", {
 			message: text,
 			...(images?.length ? { images } : {}),
@@ -587,6 +595,11 @@ export class AgentHost implements vscode.Disposable {
 	}
 
 	async setDelegateMode(enabled: boolean): Promise<void> {
+		// A switch by hand (also mid-task) is for the next prompt: the running task no longer turns it off.
+		this.#delegateOn = enabled;
+		this.#delegatedTask = false;
+		// A read in flight predates the switch: it must not flip the button back.
+		this.#stateReads++;
 		try {
 			await this.#requireProcess().request("set_delegate_mode", { enabled });
 		} finally {
@@ -1114,6 +1127,14 @@ export class AgentHost implements vscode.Disposable {
 				this.#settled = true;
 				this.#onDidChange.fire(this);
 				void this.#refreshJobs();
+				if (this.#delegatedTask) {
+					this.#delegatedTask = false;
+					if (this.#delegateOn) {
+						void this.setDelegateMode(false).catch(error =>
+							this.log.appendLine(`[warning] Could not leave delegate mode: ${errorMessage(error)}`),
+						);
+					}
+				}
 				// Settled, not `agent_end`: a non-terminal end, a queued follow-up, a goal continuation
 				// or a background job's result still wakes the agent, so the task is not done yet.
 				if (this.#soundPending) {
@@ -1292,13 +1313,15 @@ export class AgentHost implements vscode.Disposable {
 	async #refreshState(): Promise<void> {
 		const process = this.process;
 		if (!process) return;
+		const read = ++this.#stateReads;
 		const [state, stats] = await Promise.all([
 			process.request("get_state"),
 			process.request("get_session_stats").catch(() => undefined),
 		]);
-		if (this.#process !== process) return;
+		if (this.#process !== process || read !== this.#stateReads) return;
 		const fileChanged = state.sessionFile !== this.#state?.sessionFile;
 		this.#state = state;
+		this.#delegateOn = state.delegateMode === true;
 		if (this.noWorkspace && state.sessionFile) rememberNoWorkspaceSession(state.sessionFile);
 		if (state.isSettled !== undefined) this.#settled = state.isSettled && !this.#busy;
 		if (state.sessionName) this.#title = state.sessionName;

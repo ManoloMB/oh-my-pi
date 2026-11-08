@@ -1,6 +1,7 @@
 import {
 	type BashToolDetails,
 	formatBackgroundNotice,
+	formatBashHintNotice,
 	formatWallTimeNotice,
 	formatExitCodeNotice,
 } from "@oh-my-pi/pi-tui/tools/bash";
@@ -35,6 +36,7 @@ import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
+import { detectBashFailureHint, detectMaskedSuccess, MASKED_SUCCESS_HINT } from "./bash-hints";
 import { checkBashInterception } from "./bash-interceptor";
 import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
@@ -68,6 +70,7 @@ import {
 	cfgBashDirenv,
 	cfgBashDirenvLoadTimeoutMs,
 	cfgBashGitGuard,
+	cfgBashRecoveryHints,
 	cfgBashInterceptorEnabled,
 	cfgBashInterceptorPatterns,
 	cfgBashPatterns,
@@ -640,6 +643,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly concurrency = (args: Partial<BashToolInput>): "shared" | "exclusive" =>
 		args.pty === true ? "exclusive" : "shared";
 	readonly strict = true;
+	readonly outputSchema = type({
+		"+": "ignore",
+		"exitCode?": "number",
+		"timedOut?": "boolean",
+		"wallTimeMs?": "number",
+	});
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -698,15 +707,23 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number | undefined,
 		options: {
+			command: string;
 			requestedTimeoutSec?: number;
 			notices?: readonly string[];
 			wallTimeMs?: number;
-		} = {},
+		},
 	): Promise<AgentToolResult<BashToolDetails>> {
 		const exitCode = result.exitCode;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
+		// Timeouts are not failures — the command ran its course. Return an error
+		// result (isError=true for the model) but flag timedOut so the renderer
+		// uses a warning border instead of error red. Both interactive and
+		// non-interactive results carry an explicit `timedOut` field from the
+		// executor/PTY layer.
+		const isTimeout = result.timedOut === true;
 
-		const outputLines = [this.#formatResultOutput(result)];
+		const resultOutput = this.#formatResultOutput(result);
+		const outputLines = [resultOutput];
 		const notices: string[] = [];
 		if (options.wallTimeMs !== undefined) {
 			notices.push(formatWallTimeNotice(options.wallTimeMs));
@@ -718,14 +735,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		if (notices.length > 0) outputLines.push("", ...notices);
 		if (failedExit) outputLines.push("", formatExitCodeNotice(exitCode));
+		if (!isTimeout && cfgBashRecoveryHints.get(this.session.settings)) {
+			const hintInput = { command: options.command, output: resultOutput, exitCode };
+			const hint = failedExit
+				? detectBashFailureHint(hintInput)
+				: detectMaskedSuccess(hintInput)
+					? MASKED_SUCCESS_HINT
+					: undefined;
+			if (hint) outputLines.push("", formatBashHintNotice(hint));
+		}
 		const outputText = outputLines.join("\n");
-
-		// Timeouts are not failures — the command ran its course. Return an error
-		// result (isError=true for the model) but flag timedOut so the renderer
-		// uses a warning border instead of error red. Both interactive and
-		// non-interactive results carry an explicit `timedOut` field from the
-		// executor/PTY layer.
-		const isTimeout = result.timedOut === true;
 
 		const details: BashToolDetails = {};
 		if (timeoutSec === undefined) {
@@ -885,6 +904,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					if (result.artifactError) latestProgressDetails = { meta: { artifactError: result.artifactError } };
 					const wallTimeMs = performance.now() - wallTimeStart;
 					const finalResult = await this.#buildCompletedResult(result, options.timeoutSec, {
+						command: options.command,
 						requestedTimeoutSec: options.requestedTimeoutSec,
 						notices: options.notices ?? [],
 						wallTimeMs,
@@ -1332,6 +1352,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						outputBytes: 0,
 					};
 					return this.#buildCompletedResult(timedOutResult, timeoutSec, {
+						command,
 						requestedTimeoutSec,
 						notices: pendingNotices,
 						wallTimeMs: performance.now() - bridgeWallTimeStart,
@@ -1416,6 +1437,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							...(decoded.images.length > 0 ? { images: decoded.images } : {}),
 						};
 						return this.#buildCompletedResult(timedOutResult, timeoutSec, {
+							command,
 							requestedTimeoutSec,
 							notices: pendingNotices,
 							wallTimeMs: performance.now() - bridgeWallTimeStart,
@@ -1486,6 +1508,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				for (const notice of pendingNotices) bridgeNotices.push(notice);
 
 				return this.#buildCompletedResult(bridgeResult, timeoutSec, {
+					command,
 					requestedTimeoutSec,
 					notices: bridgeNotices,
 					wallTimeMs: performance.now() - bridgeWallTimeStart,
@@ -1569,6 +1592,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			}
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
+			command,
 			requestedTimeoutSec,
 			notices: pendingNotices,
 			wallTimeMs,

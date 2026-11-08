@@ -13,7 +13,7 @@
 import * as path from "node:path";
 import { previewLine, shortenPath, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { formatAge, formatCount } from "@oh-my-pi/pi-utils";
+import { formatAge, formatCount, isRecord } from "@oh-my-pi/pi-utils";
 import { type HistoryEntry, HistoryStorage } from "../session/history-storage";
 import { listSessionRecaps, type SessionRecap } from "../session/session-index";
 import {
@@ -26,6 +26,11 @@ import {
 	sessionDisplayName,
 } from "../session/session-listing";
 import { sessionDirForCwd } from "../session/session-paths";
+import { formatSessionHistoryMarkdown } from "../session/session-history-format";
+import { SessionSearchIndexClient } from "../session/session-search/client";
+import { querySessionContent } from "../session/session-search/query";
+import { openSessionSearchDb } from "../session/session-search/schema";
+import { parseTitleSlotLine } from "../session/session-title-slot";
 
 /** A listed session. Times are ISO-8601. */
 export interface ArchiveSession {
@@ -88,6 +93,38 @@ export interface ArchiveView<T> {
 	text: string;
 	records: T;
 }
+
+/** One session matching a content search, with its best-scoring doc. */
+export interface ArchiveFindHit {
+	session: string;
+	project: string;
+	title: string;
+	/** Time of the matching entry. */
+	at: string;
+	/** Evidence type of the best match: user, assistant, tool_call, tool_result, summary, thinking, custom. */
+	type: string;
+	snippet: string;
+	/** 1-based JSONL line of the best match (pass to `archiveOpen`). */
+	line: number;
+	file: string;
+	/** Further matching entries in the same session. */
+	more: number;
+}
+
+/** A window of one session transcript. */
+export interface ArchiveOpenWindow {
+	file: string;
+	from: number;
+	to: number;
+	total: number;
+}
+
+const FIND_SNIPPET_WIDTH = 240;
+const FIND_RECAP_WIDTH = 160;
+const OPEN_SUMMARY_WIDTH = 1500;
+const OPEN_MAX_CHARS = 12_000;
+/** Indexing budget spent before each find; the worker keeps catching up across calls. */
+const FIND_RECONCILE_BUDGET_MS = 300;
 
 /** Display width of a prompt preview in listings; records keep the full text. */
 const PROMPT_PREVIEW_WIDTH = 160;
@@ -217,6 +254,133 @@ export function archiveRecaps(cwd: string | undefined, limit: number): ArchiveVi
 		lines.push(`- ${facts.join(" · ")}`, `  ${previewLine(recap.text, TRUNCATE_LENGTHS.RECAP)}`);
 	}
 	return { text: lines.join("\n"), records };
+}
+
+/**
+ * Verbatim content search over past sessions (assistant text, tool calls and
+ * results, summaries): one row per session, best match first. Spends a small
+ * indexing budget first; `cwd` undefined spans every project.
+ *
+ * @throws {ToolError} when the query is empty or the index cannot be opened.
+ */
+export async function archiveFind(
+	query: string,
+	cwd: string | undefined,
+	limit: number,
+	currentSessionId: string,
+	opts: { currentCwd?: string; indexThinking?: boolean } = {},
+): Promise<ArchiveView<ArchiveFindHit[]>> {
+	const { complete } = await SessionSearchIndexClient.global().reconcile({
+		scopeCwd: cwd ?? opts.currentCwd,
+		budgetMs: FIND_RECONCILE_BUDGET_MS,
+		indexThinking: opts.indexThinking,
+	});
+	const db = openSessionSearchDb();
+	if (!db) throw new ToolError("Session content index is unavailable.");
+	const hits = querySessionContent(db, {
+		query,
+		cwd,
+		currentCwd: opts.currentCwd ?? cwd ?? "",
+		currentSessionId,
+		limit,
+	});
+	const states = new Map<string, { file_path: string; title: string | null }>();
+	if (hits.length > 0) {
+		const placeholders = hits.map(() => "?").join(", ");
+		const rows = db
+			.query<{ session_id: string; file_path: string; title: string | null }, string[]>(
+				`SELECT session_id, file_path, title FROM session_index_state WHERE session_id IN (${placeholders})`,
+			)
+			.all(...hits.map(hit => hit.sessionId));
+		for (const row of rows) states.set(row.session_id, row);
+	}
+	const recaps = latestRecaps(hits.map(hit => hit.sessionId));
+	const records: ArchiveFindHit[] = hits.map(hit => ({
+		session: hit.sessionId,
+		project: hit.cwd,
+		title: states.get(hit.sessionId)?.title || "untitled",
+		at: hit.time,
+		type: hit.type,
+		snippet: hit.snippet,
+		line: hit.lineNo,
+		file: states.get(hit.sessionId)?.file_path ?? "",
+		more: hit.more,
+	}));
+
+	const catchingUp = complete ? "" : "; index catching up — rerun for more";
+	if (records.length === 0) {
+		const note = complete ? "" : " Index catching up — rerun for more.";
+		return { text: `No content matches for ${JSON.stringify(query)} ${scopeLabel(cwd)}.${note}`, records };
+	}
+	const lines = [
+		`Content matches for ${JSON.stringify(query)} ${scopeLabel(cwd)} (${formatCount("session", records.length)}${catchingUp})`,
+	];
+	records.forEach((record, index) => {
+		const facts = [shortId(record.session), ago(record.at), record.title];
+		if (!cwd) facts.push(shortenPath(record.project));
+		lines.push(`${index + 1}. ${facts.join(" · ")}`);
+		const tool = hits[index]?.toolName;
+		const tag = tool && record.type.startsWith("tool") ? `[${record.type} ${tool}]` : `[${record.type}]`;
+		const more = record.more > 0 ? ` (+${record.more} more)` : "";
+		lines.push(`   ${tag} ${previewLine(record.snippet, FIND_SNIPPET_WIDTH)}${more}`);
+		const recap = recaps.get(record.session);
+		if (recap) lines.push(`   recap: ${previewLine(recap, FIND_RECAP_WIDTH)}`);
+		lines.push(`   open: archive.open("${shortId(record.session)}", {line: ${record.line}})`);
+	});
+	return { text: lines.join("\n"), records };
+}
+
+/**
+ * A window of one session transcript around JSONL `line` (1-based), formatted
+ * as a concise markdown transcript; without `line`, the session's last lines.
+ *
+ * @throws {ToolError} when no session or several sessions match, or the file is not a session.
+ */
+export async function archiveOpen(
+	idOrFile: string,
+	line: number | undefined,
+	before = 8,
+	after = 16,
+): Promise<ArchiveView<ArchiveOpenWindow>> {
+	const file = path.isAbsolute(idOrFile) ? idOrFile : await resolveSessionFile(idOrFile);
+	const allLines = (await Bun.file(file).text()).split("\n");
+	if (allLines.at(-1) === "") allLines.pop();
+	const total = allLines.length;
+	// Current files open with the fixed-width title slot; legacy files with the header.
+	const header = parseJsonLine(allLines[parseTitleSlotLine(allLines[0] ?? "") ? 1 : 0]);
+	if (!header || header.type !== "session" || typeof header.id !== "string") {
+		throw new ToolError(`Not a readable session file: ${shortenPath(file)}`);
+	}
+	const from = line === undefined ? Math.max(1, total - before - after) : Math.max(1, line - before);
+	const to = line === undefined ? total : Math.min(total, line + after);
+	const messages: unknown[] = [];
+	const summaries: string[] = [];
+	for (let lineNo = from; lineNo <= to; lineNo++) {
+		const entry = parseJsonLine(allLines[lineNo - 1]);
+		if (!entry) continue;
+		if (entry.type === "message" && isRecord(entry.message)) messages.push(entry.message);
+		else if ((entry.type === "compaction" || entry.type === "branch_summary") && typeof entry.summary === "string") {
+			summaries.push(`[summary] ${previewLine(entry.summary, OPEN_SUMMARY_WIDTH)}`);
+		}
+	}
+	const id = header.id;
+	// Tool output is usually what a find hit points at; render it (bounded) instead of a one-line status.
+	const transcript = formatSessionHistoryMarkdown(messages, { expandToolIO: true });
+	const body = [...summaries, transcript].filter(part => part.trim().length > 0).join("\n\n");
+	const clipped = body.length > OPEN_MAX_CHARS ? `${body.slice(0, OPEN_MAX_CHARS)}\n…` : body;
+	const lines = [`Session ${id} · lines ${from}–${to} of ${total} · ${shortenPath(file)}`, "", clipped];
+	if (to < total) lines.push("", `more: archive.open("${shortId(id)}", {line: ${to + after}})`);
+	return { text: lines.join("\n"), records: { file, from, to, total } };
+}
+
+function parseJsonLine(text: string | undefined): Record<string, unknown> | undefined {
+	if (!text) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function resolveSessionFile(idPrefix: string): Promise<string> {

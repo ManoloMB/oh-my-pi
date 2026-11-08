@@ -6,6 +6,7 @@ import {
 	resolveOutputSinkHeadBytes,
 } from "../../tools/output-meta";
 import { isEvalTimeoutControlEvent, withBridgeTimeoutPause } from "../bridge-timeout";
+import type { EvalCallScheduler } from "../call-scheduler";
 import { DisplayOutputCollector } from "../executor-base";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import { installJsPackages } from "./package-installer";
@@ -26,6 +27,8 @@ export interface JsExecutorOptions {
 	idleTimeoutMs?: number;
 	onChunk?: (chunk: string) => Promise<void> | void;
 	onStatus?: (event: JsStatusEvent) => void;
+	/** Per-cell scheduler for session tool calls the cell makes. */
+	callScheduler?: EvalCallScheduler;
 	signal?: AbortSignal;
 	sessionId: string;
 	/** Logical owner identifier; scopes retained-worker cleanup. */
@@ -173,6 +176,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			code,
 			filename: options.filename ?? `js-cell-${crypto.randomUUID()}.js`,
 			timeoutMs: runtimeTimeoutMs ?? options.idleTimeoutMs,
+			callScheduler: options.callScheduler,
 			runState: {
 				signal,
 				onText: chunk => outputSink.push(chunk),

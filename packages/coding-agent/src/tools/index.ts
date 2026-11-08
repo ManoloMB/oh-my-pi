@@ -37,7 +37,7 @@ import type { SessionManager } from "../session/session-manager";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
-import { type AgentDefinition, canSpawnAtDepth } from "../task/types";
+import { type AgentDefinition, canSpawnAtDepth, type TaskForkSource } from "../task/types";
 import { type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { EventBus } from "../utils/event-bus";
@@ -73,12 +73,16 @@ import { SecurityScanTool } from "./security-scan";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
+import { TeamTaskTool } from "./team-task";
+import { SessionSearchTool } from "./session-search";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
 import {
+	cfgArchiveContentSearch,
+	cfgArchiveEnabled,
 	cfgAskEnabled,
 	cfgAstEditEnabled,
 	cfgAstGrepEnabled,
@@ -103,6 +107,7 @@ import { cfgGoalEnabled } from "../goals/settings";
 import { cfgLspEnabled } from "../lsp/settings";
 import { cfgMemoryBackend } from "../memory-backend/settings";
 import { cfgTaskMaxRecursionDepth } from "../task/settings";
+import { isTeamEnabled } from "../task/team-board";
 
 export * from "../edit";
 export * from "../goals";
@@ -415,6 +420,8 @@ export interface ToolSession {
 	getActiveModelString?: () => string | undefined;
 	/** Get the current session model object (provider/api capabilities), regardless of how it was chosen. */
 	getActiveModel?: () => Model | undefined;
+	/** Flush the session to disk and snapshot what a `task` fork child inherits; undefined when unforkable. */
+	getTaskForkSource?: () => Promise<TaskForkSource | undefined>;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */
 	getServiceTierByFamily?: () => ServiceTierByFamily | undefined;
 	/**
@@ -572,6 +579,8 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	task: s => TaskTool.create(s),
 	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
+	team_task: s => new TeamTaskTool(s),
+	session_search: s => new SessionSearchTool(s),
 	web_search: s => new WebSearchTool(s),
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
@@ -782,6 +791,14 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgAutolearnEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined) &&
 				["hindsight", "mnemopi", "local"].includes(cfgMemoryBackend.get(session.settings))
+			);
+		}
+		if (name === "team_task") return isTeamEnabled(session.settings, session.taskDepth ?? 0, session.enableIrc);
+		if (name === "session_search") {
+			return (
+				cfgArchiveEnabled.get(session.settings) &&
+				cfgArchiveContentSearch.get(session.settings) &&
+				!(allowEval && (requestedTools === undefined || requestedTools.includes("eval")))
 			);
 		}
 		if (name === "task") {

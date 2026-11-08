@@ -462,10 +462,12 @@ const DEFERRED_TITLE_MIN_WORDS = 40;
 /** Cap on the forked title request itself (measured p90 2.3s). */
 const TITLE_FORK_TIMEOUT_MS = 15_000;
 
+import { DIR_CONTEXT_NOTICE_CUSTOM_TYPE, DirContextCoordinator } from "./dir-context-coordinator";
 import { ScopeCheckpoint, type ScopeCheckpointLevel, type ScopeCheckpointStats } from "./scope-checkpoint";
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
+import { VerifyTracker, type VerifyTrackerHost } from "./verify-tracker";
 
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
@@ -919,6 +921,7 @@ export class AgentSession implements SettingsScope {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	readonly #verify: VerifyTracker;
 	readonly #scopeCheckpoint: ScopeCheckpoint;
 	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
@@ -1054,6 +1057,7 @@ export class AgentSession implements SettingsScope {
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;
+	readonly #dirContext: DirContextCoordinator;
 	readonly #stats: SessionStatsTracker;
 
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
@@ -1755,9 +1759,20 @@ export class AgentSession implements SettingsScope {
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			prewalkWillHandoff: () => this.#prewalk.willHandoff,
-			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
+		const verifyHost: VerifyTrackerHost = {
+			agent: this.agent,
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			cwd: () => this.sessionManager.getCwd(),
+			planModeEnabled: () => this.#planModeState?.enabled === true,
+			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
+			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+			promptGeneration: () => this.#promptGeneration,
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+		};
+		this.#verify = new VerifyTracker(verifyHost);
 		this.#scopeCheckpoint = new ScopeCheckpoint({ agentKind: () => this.#agentKind });
 		this.#modelMentions = new ModelMentionRegistry({
 			sessionManager: this.sessionManager,
@@ -2122,6 +2137,22 @@ export class AgentSession implements SettingsScope {
 			sessionGeneration: () => this.#sessionGeneration,
 		};
 		this.#ttsr = new TtsrCoordinator(ttsrHost, config.ttsrManager);
+		this.#dirContext = new DirContextCoordinator({
+			cwd: () => this.sessionManager.getCwd(),
+			settings: this.settings,
+			messages: () => this.agent.state.messages,
+			deliver: (content, entries) =>
+				this.sendCustomMessage(
+					{
+						customType: DIR_CONTEXT_NOTICE_CUSTOM_TYPE,
+						content,
+						display: false,
+						details: { entries },
+						attribution: "agent",
+					},
+					{ deliverAs: "aside" },
+				).then(() => undefined),
+		});
 		this.#extensionRunner?.setToolCallPreflight?.({
 			before: (toolCallId, tool, args) => this.#ttsr.beforeBridgedToolCall(toolCallId, tool, args),
 			after: (toolCallId, result, context) => this.#ttsr.afterBridgedToolCall(toolCallId, result, context),
@@ -2407,7 +2438,10 @@ export class AgentSession implements SettingsScope {
 			},
 			resetAdvisorRuntimes: (reason, options) => this.#advisors.resetAllRuntimes(reason, options),
 			rebaseAdvisorPrefix: reason => this.#advisors.rebaseDeliveredPrefixes(reason),
-			rebaseAfterCompaction: () => this.#stats.rebaseAfterCompaction(),
+			rebaseAfterCompaction: () => {
+				this.#stats.rebaseAfterCompaction();
+				this.#dirContext.reset();
+			},
 			recordAnchoredHistoryRewrite: tokensRemoved => this.#stats.recordAnchoredHistoryRewrite(tokensRemoved),
 			getContextBreakdown: options => this.getContextBreakdown(options),
 			getContextUsage: options => this.getContextUsage(options),
@@ -3841,6 +3875,7 @@ export class AgentSession implements SettingsScope {
 		// not progress an agent could mark done.
 		if (event.type === "message_end" && event.message.role === "toolResult") {
 			this.#todo.onToolResult(event.message.toolName, event.message.isError);
+			this.#verify.onToolResult(event.message);
 		}
 		// Active-time, user-wait, and tool-round bookkeeping for the scope checkpoint; same
 		// synchronous requirement as the todo counter above.
@@ -4545,9 +4580,15 @@ export class AgentSession implements SettingsScope {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
+				const servedToolChoiceLabel = this.#toolChoiceQueue.consumeLastServedLabel();
 				const todoContinuationScheduled =
-					this.#stopTimeTodoRemindersEnabled && (await this.#todo.checkCompletion(msg));
+					this.#stopTimeTodoRemindersEnabled && (await this.#todo.checkCompletion(msg, servedToolChoiceLabel));
 				if (todoContinuationScheduled) {
+					await emitAgentEndNotification({ willContinue: true });
+					return;
+				}
+				const verifyContinuationScheduled = await this.#verify.checkCompletion(msg, servedToolChoiceLabel);
+				if (verifyContinuationScheduled) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
@@ -4928,7 +4969,7 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+	async #afterToolCall(ctx: AfterToolCallContext): Promise<AfterToolCallResult | undefined> {
 		if (
 			this.#isTerminalYieldToolResult({
 				toolName: ctx.toolCall.name,
@@ -4941,6 +4982,8 @@ export class AgentSession implements SettingsScope {
 			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
+		// Awaited so a nested context notice joins the very next model request.
+		await this.#dirContext.afterToolCall(ctx);
 		return this.#ttsr.afterToolCall(ctx);
 	}
 	/**
@@ -5937,6 +5980,7 @@ export class AgentSession implements SettingsScope {
 		// calls, and error state. agent.reset() keeps the model and system prompt.
 		this.#releaseQueuedTtsrReservations();
 		this.agent.reset();
+		this.#dirContext.reset();
 		this.#pendingNextTurnMessages = [];
 		this.#experimentalContextNotesReminder = undefined;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -6558,6 +6602,11 @@ export class AgentSession implements SettingsScope {
 	/** Compact the active session history. */
 	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
 		return this.#maintenance.compact(customInstructions, options);
+	}
+
+	/** Compaction reserve derived from observed usage, when it currently applies. */
+	compactionAdaptiveReserveTokens(): number | undefined {
+		return this.#maintenance.adaptiveReserveTokens();
 	}
 
 	/** Cancel active manual, automatic, and handoff maintenance, preserving an optional source reason. */
@@ -7964,6 +8013,7 @@ export class AgentSession implements SettingsScope {
 			this.#irc.flushPending();
 
 			this.#todo.resetCycle();
+			this.#verify.resetCycle();
 			this.#scopeCheckpoint.resetCycle();
 			this.#resetPromptMaintenanceState();
 			this.#recovery.setAcceptTerminalEmptyStop(options?.acceptTerminalEmptyStop === true);
@@ -9934,6 +9984,7 @@ export class AgentSession implements SettingsScope {
 			try {
 				this.#releaseQueuedTtsrReservations();
 				this.agent.reset();
+				this.#dirContext.reset();
 				this.tokenRate.reset();
 				if (options?.drop && previousSessionFile) {
 					try {
@@ -9993,6 +10044,7 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 			this.#todo.resetCycle();
+			this.#verify.resetCycle();
 			this.#scopeCheckpoint.resetCycle();
 			this.#planReferenceSent = false;
 			this.#planReferencePath = "local://PLAN.md";
@@ -10733,6 +10785,7 @@ export class AgentSession implements SettingsScope {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
 		}
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
+		this.#dirContext.reset();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
@@ -11652,6 +11705,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#dirContext.reset();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -12017,6 +12071,7 @@ export class AgentSession implements SettingsScope {
 
 			if (!skipConversationRestore) {
 				this.agent.replaceMessages(sessionContext.messages);
+				this.#dirContext.reset();
 				this.#advisors.resetSessionState();
 				this.#closeCodexProviderSessionsForHistoryRewrite();
 			}
@@ -12136,6 +12191,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#dirContext.reset();
 			this.#advisors.resetSessionState();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 			advisorRecordersDetached = false;
@@ -12460,6 +12516,7 @@ export class AgentSession implements SettingsScope {
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
 		this.agent.replaceMessages(displayContext.messages);
+		this.#dirContext.reset();
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();

@@ -44,7 +44,7 @@ import { cfgEvalAutoBackgroundEnabled } from "./eval/settings";
 import { cfgTtsrBuiltinRules, cfgTtsrDisabledRules, cfgTtsrEnabled } from "./export/ttsr-settings";
 import { cfgTuiAutoGraph, cfgTuiReactions, cfgTuiRenderMermaid, cfgTuiRenderSvg } from "./modes/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
-import { cfgToolsFormat } from "./session/context-settings";
+import { cfgContextFilesNestedAutoInject, cfgToolsFormat } from "./session/context-settings";
 import {
 	cfgCodingGuidance,
 	cfgIncludeModelInPrompt,
@@ -71,6 +71,7 @@ export const cfgSystemPromptInputs = combine({
 	personality: cfgPersonality,
 	includeModelInPrompt: cfgIncludeModelInPrompt,
 	includeWorkspaceTree: cfgIncludeWorkspaceTree,
+	dirContextAutoInject: cfgContextFilesNestedAutoInject,
 	codingGuidance: cfgCodingGuidance,
 	inlineToolDescriptors: cfgInlineToolDescriptors,
 	toolsFormat: cfgToolsFormat,
@@ -585,6 +586,8 @@ export interface BuildSystemPromptOptions {
 	personality?: Personality;
 	/** Whether to include the workspace directory tree in the system prompt. Default: false */
 	includeWorkspaceTree?: boolean;
+	/** Whether nested AGENTS.md files are injected automatically when touched (`contextFiles.nestedAutoInject`). Default: true */
+	dirContextAutoInject?: boolean;
 	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
 	renderMermaid?: boolean;
 	/** Whether the reader's UI draws ```svg fences as themed images, so the prompt invites figures. Default: false */
@@ -688,6 +691,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeModelInPrompt = true,
 		personality = "default",
 		includeWorkspaceTree = false,
+		dirContextAutoInject = true,
 		renderMermaid = true,
 		renderSvg = false,
 		autoGraph = false,
@@ -1028,6 +1032,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		browserEnabled: evalPreludes.some(prelude => prelude.name === "browser"),
 		computerEnabled: evalPreludes.some(prelude => prelude.name === "computer"),
 		includeWorkspaceTree,
+		dirContextAutoInject,
 		renderMermaid,
 		renderSvg,
 		autoGraph,

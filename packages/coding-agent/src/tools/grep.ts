@@ -465,6 +465,15 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		return this.#description;
 	}
 	readonly parameters = searchSchema;
+	readonly outputSchema = type({
+		"+": "ignore",
+		"matchCount?": "number",
+		"fileCount?": "number",
+		"files?": "string[]",
+		"fileMatches?": type({ path: "string", count: "number" }).array(),
+		"truncated?": "boolean",
+		"error?": "string",
+	});
 	readonly strict = true;
 	readonly examples = GREP_EXAMPLES;
 

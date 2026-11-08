@@ -3,7 +3,7 @@ import type { TspKind, TspSpan } from "@oh-my-pi/pi-wire";
 import { BashExecutionComponent } from "../src/chat/bash-execution";
 import { ToolExecutionComponent } from "../src/chat/tool-execution";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
-import { bashToolRenderer, formatExitCodeNotice, formatWallTimeNotice } from "../src/tools/bash";
+import { bashToolRenderer, formatBashHintNotice, formatExitCodeNotice, formatWallTimeNotice } from "../src/tools/bash";
 import { type EvalCellResult, evalToolRenderer } from "../src/tools/eval";
 import type { RenderResultOptions } from "../src/tools/renderer";
 import { getThemeByName, setThemeInstance } from "../src/theme";
@@ -187,6 +187,34 @@ describe("bash native run box", () => {
 		expect(facts[0]).toEqual({ t: "Service web · running · ready", s: "muted" });
 		expect(facts.at(-1)?.s).toBe("warning");
 		expect(facts.at(-1)?.t).toContain("900");
+	});
+
+	it("strips a trailing recovery hint so the exit notice and artifact footer are still recognized", () => {
+		const hint = formatBashHintNotice("The shell could not find the program.");
+		const text = [
+			"boom",
+			"[raw output: artifact://7]",
+			"",
+			formatWallTimeNotice(300),
+			"",
+			formatExitCodeNotice(127),
+			"",
+			hint,
+		].join("\n");
+		const view = bashToolRenderer.describeResult(
+			{ content: [{ type: "text", text }], details: { exitCode: 127, wallTimeMs: 300 }, isError: true },
+			{ ...done, elapsedMs: 500 },
+			{ command: "omp-no-such-binary-xyz" },
+		);
+		const box = nodes(view.body)[0];
+		const output = String(props(collect(box?.c, "ansi")[0]).text);
+		expect(output).toBe("boom");
+		expect(output).not.toContain("[Hint:");
+		expect(
+			foot(box)
+				?.facts?.map(s => s.t)
+				.join(""),
+		).toContain("Artifact 7");
 	});
 
 	it("attaches result images below the box", () => {

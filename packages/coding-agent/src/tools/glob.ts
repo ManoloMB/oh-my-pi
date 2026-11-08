@@ -135,6 +135,15 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 		return this.#description;
 	}
 	readonly parameters = findSchema;
+	readonly outputSchema = type({
+		"+": "ignore",
+		"fileCount?": "number",
+		"files?": "string[]",
+		"truncated?": "boolean",
+		"timedOut?": "boolean",
+		"missingPaths?": "string[]",
+		"error?": "string",
+	});
 
 	readonly strict = true;
 

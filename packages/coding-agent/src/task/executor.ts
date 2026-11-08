@@ -55,6 +55,7 @@ import type { MCPManager } from "../mcp/manager";
 import type { MnemopiSessionState } from "../mnemopi/state";
 import { initializeExtensions } from "../modes/runtime-init";
 import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pending.md" with { type: "text" };
+import subagentForkAssignmentTemplate from "../prompts/system/subagent-fork-assignment.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { AgentLifecycleManager, type AgentReviver } from "../registry/agent-lifecycle";
@@ -88,11 +89,13 @@ import {
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
+import { isTeamEnabled } from "./team-board";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
 import { DEFAULT_PEER_ROSTER_LIMIT } from "@oh-my-pi/pi-tui/tools/irc";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
 import { ToolAbortError } from "../tools/tool-errors";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
 import { resetYieldTurnState } from "../tools/yield";
 import { type EventBus, emitSubagentFrame } from "../utils/event-bus";
 import { trackLateCleanup } from "../utils/late-cleanup";
@@ -113,6 +116,7 @@ import {
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	type TaskForkSource,
 } from "./types";
 import {
 	type AgentProgress,
@@ -435,6 +439,11 @@ export interface ExecutorOptions {
 	effort?: TaskEffort;
 	/** Caller's description of how open-ended the work is; rides the initial prompt into the child's `auto` thinking classifier. */
 	solutionSpace?: string;
+	/**
+	 * Fork spawn: the child opens a copy of the parent transcript and sends the parent's
+	 * system prompt, model, thinking level, tool definitions and prompt-cache key verbatim.
+	 */
+	forkSource?: TaskForkSource;
 	/** Schema used to validate the final structured completion. */
 	outputSchema?: unknown;
 	/** Enforcement policy for {@link outputSchema}; defaults to legacy permissive behavior. */
@@ -3655,6 +3664,8 @@ interface SubagentPromptInputs {
 	ircEnabled: boolean;
 	/** Root resolved by the latest roster ensure; peer rows render scoped to it, so a session switch hides stale parked trees. */
 	ircRoot: { sessionFile?: string };
+	/** Fork spawns: the parent's exact system prompt blocks, sent verbatim so the child reuses its prompt cache. */
+	forkSystemPrompt?: string[];
 }
 
 /**
@@ -3687,6 +3698,31 @@ function explicitSubagentToolNames(spec: SubagentSessionSpec): ReadonlySet<strin
 	return new Set((spec.options.customTools ?? []).map(tool => tool.name));
 }
 
+/** Render the subagent role/context block (agent prompt, context, plan, worktree, schema, IRC roster). */
+function renderSubagentPrompt(inputs: SubagentPromptInputs, launch?: SubagentLaunchInputs): string {
+	const ircRoster = inputs.ircEnabled
+		? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
+		: undefined;
+	return prompt.render(subagentSystemPromptTemplate, {
+		agent: inputs.agentSystemPrompt,
+		context: inputs.context,
+		planReference: inputs.planReference,
+		planReferencePath: inputs.planReferencePath,
+		worktree: inputs.worktree,
+		outputSchema: inputs.outputSchema,
+		outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
+		// Read the live item set through the registry instead of capturing the session, which
+		// would pin its whole graph past park. A revive builds while the registry session is
+		// null, so it renders the cleared set rather than the launch-time pooled instructions.
+		workPoolYieldItems:
+			AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ?? launch?.workPoolYieldItems ?? [],
+		ircPeers: ircRoster?.peers ?? [],
+		ircParkedCount: ircRoster?.parkedCount ?? 0,
+		ircOmittedCount: ircRoster?.omittedCount ?? 0,
+		ircSelfId: inputs.ircEnabled ? inputs.id : "",
+	});
+}
+
 function buildSubagentSessionOptions(
 	spec: SubagentSessionSpec,
 	settings: Settings,
@@ -3699,6 +3735,7 @@ function buildSubagentSessionOptions(
 	// subagent revived after `/mcp reload` must see the manager's current tools.
 	const mcpTools = spec.options.mcpManager ? createMCPProxyTools(spec.options.mcpManager) : [];
 	const customTools = spec.options.customTools ?? [];
+	const forkSystemPrompt = inputs.forkSystemPrompt;
 	return {
 		...spec.options,
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
@@ -3708,35 +3745,15 @@ function buildSubagentSessionOptions(
 		expectedAgentRef,
 		resolveServiceTierByFamily: launch?.resolveServiceTierByFamily,
 		onFirstChatDispatch: launch?.onFirstChatDispatch,
-		systemPrompt: defaultPrompt => {
-			const ircRoster = inputs.ircEnabled
-				? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
-				: undefined;
-			const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
-				agent: inputs.agentSystemPrompt,
-				context: inputs.context,
-				planReference: inputs.planReference,
-				planReferencePath: inputs.planReferencePath,
-				worktree: inputs.worktree,
-				outputSchema: inputs.outputSchema,
-				outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
-				// Read the live item set through the registry instead of capturing the session, which
-				// would pin its whole graph past park. A revive builds while the registry session is
-				// null, so it renders the cleared set rather than the launch-time pooled instructions.
-				workPoolYieldItems:
-					AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
-					launch?.workPoolYieldItems ??
-					[],
-				ircPeers: ircRoster?.peers ?? [],
-				ircParkedCount: ircRoster?.parkedCount ?? 0,
-				ircOmittedCount: ircRoster?.omittedCount ?? 0,
-				ircSelfId: inputs.ircEnabled ? inputs.id : "",
-			});
-			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
-			// `<project-context>` block so spawns of the same agent share the static
-			// prompt prefix as a cache hit.
-			return [...defaultPrompt, subagentPrompt];
-		},
+		// A fork sends the parent's prompt bytes unchanged (cache prefix); its role block rides the
+		// first user message instead. The reviver rebuilds from the same spec and keeps it.
+		systemPrompt: forkSystemPrompt
+			? [...forkSystemPrompt]
+			: defaultPrompt =>
+					// Per-spawn text (context, worktree, IRC roster) goes after the trailing
+					// `<project-context>` block so spawns of the same agent share the static
+					// prompt prefix as a cache hit.
+					[...defaultPrompt, renderSubagentPrompt(inputs, launch)],
 	};
 }
 
@@ -3860,6 +3877,33 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 }
 
 /**
+ * Coordination tools a subagent's explicit allowlist gains. Agents that can start
+ * background work (`task`, `bash`) need `wait` to block on it; without it they `sleep`.
+ * Agents that may coordinate with peers get the shared `team_task` board — like
+ * outbound peer messaging, that requires `write`. Runs after `exec` expansion and the
+ * max-depth `task` strip; `createTools` still drops a tool whose gate is off.
+ * Restricted sessions own their explicit list and are never widened.
+ */
+export function withCoordinationTools(
+	toolNames: string[] | undefined,
+	opts: { restrictToolNames: boolean; settings: Settings; childDepth: number },
+): string[] | undefined {
+	if (!toolNames || opts.restrictToolNames) return toolNames;
+	let names = toolNames;
+	if (!names.includes("wait") && (names.includes("task") || names.includes("bash"))) {
+		names = [...names, "wait"];
+	}
+	if (
+		!names.includes("team_task") &&
+		names.includes("write") &&
+		isTeamEnabled(opts.settings, opts.childDepth, undefined)
+	) {
+		names = [...names, "team_task"];
+	}
+	return names;
+}
+
+/**
  * Run a single agent in-process.
  */
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
@@ -3978,18 +4022,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}
-	// Agents that can start background work (`task`, `bash`) need `wait` to block on it;
-	// without it they `sleep`. Runs after `exec` expansion and the max-depth `task` strip.
-	// `createTools` still drops it when no wake source (async/IRC/services) is enabled.
-	// Restricted sessions own their explicit list and are never widened.
-	if (
-		toolNames &&
-		!options.restrictToolNames &&
-		!toolNames.includes("wait") &&
-		(toolNames.includes("task") || toolNames.includes("bash"))
-	) {
-		toolNames = [...toolNames, "wait"];
-	}
+	toolNames = withCoordinationTools(toolNames, {
+		restrictToolNames: options.restrictToolNames === true,
+		settings: subagentSettings,
+		childDepth,
+	});
 	// Inbound steering works without messaging; outbound peer coordination requires write.
 	const ircEnabled =
 		options.enableIrc !== false &&
@@ -4120,7 +4157,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			checkAbort();
 
-			const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings);
+			// A fork keeps the parent's model and thinking level verbatim: any change misses its prompt cache.
+			const forkSource = options.forkSource;
+			if (forkSource && (options.effort !== undefined || modelOverride !== undefined || agent.model?.length)) {
+				logger.debug("Fork subagent ignores effort and model overrides", {
+					agent: agent.name,
+					effort: options.effort,
+					requested: modelPatterns,
+				});
+			}
+			const configuredModelPatterns = forkSource ? [] : resolveConfiguredModelPatterns(modelPatterns, settings);
 			const inheritedRetryFallbackChain =
 				configuredModelPatterns.length === 1
 					? resolveSubagentInheritedRetryFallbackChain(
@@ -4135,15 +4181,23 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				explicitThinkingLevel,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
-			} = await awaitAbortable(
-				resolveModelOverrideWithAuthFallback(
-					modelPatterns,
-					options.parentActiveModelPattern,
-					modelRegistry,
-					settings,
-					id,
-				),
-			);
+			} = forkSource
+				? {
+						model: forkSource.model,
+						thinkingLevel: undefined,
+						explicitThinkingLevel: false,
+						authFallbackUsed: false,
+						warning: undefined,
+					}
+				: await awaitAbortable(
+						resolveModelOverrideWithAuthFallback(
+							modelPatterns,
+							options.parentActiveModelPattern,
+							modelRegistry,
+							settings,
+							id,
+						),
+					);
 			if (modelResolutionWarning) {
 				logger.warn("Subagent model resolution warning", {
 					warning: modelResolutionWarning,
@@ -4176,7 +4230,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const retryFallbackRole = installSubagentRetryFallbackChain({
 				settings: subagentSettings,
 				id,
-				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
+				candidates: forkSource
+					? []
+					: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
 				inheritedFallbackChain: inheritedRetryFallbackChain,
 				model,
 				authFallbackUsed,
@@ -4196,11 +4252,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// through to the normal selectors below.
 			// The ceiling outlives initial resolution: it rides into the session so
 			// retry-fallback recovery can never clamp effort back up past it.
-			const spawnEffortCeiling = options.effort !== undefined ? cfgTaskMaxEffort.get(settings) : undefined;
+			const spawnEffort = forkSource ? undefined : options.effort;
+			const spawnEffortCeiling = spawnEffort !== undefined ? cfgTaskMaxEffort.get(settings) : undefined;
 			const effortLevel =
-				options.effort !== undefined
-					? resolveTaskEffortLevel(model, options.effort, spawnEffortCeiling)
-					: undefined;
+				spawnEffort !== undefined ? resolveTaskEffortLevel(model, spawnEffort, spawnEffortCeiling) : undefined;
 			if (model) {
 				const displayLevel = effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : undefined);
 				progress.resolvedModelIdentity = formatModelStringWithRouting(model);
@@ -4217,13 +4272,34 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel));
 			resolvedAt = performance.now();
 			const effectiveCwd = worktree ?? cwd;
-			const sessionManagerPromise = sessionFile
-				? SessionManager.open(sessionFile, undefined, undefined, {
-						initialCwd: effectiveCwd,
-						parentSession: options.sessionFile ?? undefined,
+			let sessionManagerPromise: Promise<SessionManager>;
+			if (forkSource) {
+				if (!sessionFile) throw new Error("fork requires a persisted subagent session");
+				// Same mechanics as `/tan`: copy the parent transcript into the child's own file.
+				sessionManagerPromise = SessionManager.forkFrom(
+					forkSource.sessionFile,
+					effectiveCwd,
+					path.dirname(sessionFile),
+					undefined,
+					{
+						copyArtifacts: false,
 						suppressBreadcrumb: true,
-					})
-				: Promise.resolve(SessionManager.inMemory(effectiveCwd));
+						sessionFile,
+						// The child's cost reflects its own work, not the parent's accumulated spend.
+						resetInheritedCost: true,
+						// The parent is mid-turn (this very task call): pair its unresolved tool calls.
+						repairInterruptedTail: true,
+					},
+				);
+			} else {
+				sessionManagerPromise = sessionFile
+					? SessionManager.open(sessionFile, undefined, undefined, {
+							initialCwd: effectiveCwd,
+							parentSession: options.sessionFile ?? undefined,
+							suppressBreadcrumb: true,
+						})
+					: Promise.resolve(SessionManager.inMemory(effectiveCwd));
+			}
 			// Setup below can fail before this promise's consumption boundary.
 			// Observe rejection immediately while preserving it for the later await.
 			sessionManagerPromise.catch(() => {});
@@ -4232,12 +4308,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// fast/cheap target at its first edit/write — the same mechanism as the
 			// session-level --prewalk. The bundled generic `task` agent has no
 			// frontmatter default; the `task.prewalk` toggle (default off) arms it.
-			// Resolution failures skip prewalk instead of failing the spawn.
+			// Resolution failures skip prewalk instead of failing the spawn. Forks never prewalk:
+			// the model/thinking switch would miss the parent's prompt cache.
 			let prewalk: Prewalk | undefined;
-			const prewalkPattern = resolveAgentPrewalkPattern({
-				settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
-				agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
-			});
+			const prewalkPattern = forkSource
+				? undefined
+				: resolveAgentPrewalkPattern({
+						settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
+						agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
+					});
 			if (prewalkPattern) {
 				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
 				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);
@@ -4321,8 +4400,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						model || modelOverride === undefined ? undefined : subagentRetryFallbackRole(id),
 					modelPatternDefaultFallbackChain:
 						model || modelOverride === undefined ? undefined : inheritedRetryFallbackChain,
-					thinkingLevel: effectiveThinkingLevel,
+					thinkingLevel: forkSource ? forkSource.thinkingLevel : effectiveThinkingLevel,
 					thinkingLevelCeiling: spawnEffortCeiling,
+					// Fork: declare the parent's wire tool bytes and route on its cache key so the
+					// child's first request reads the parent's provider prompt cache.
+					pinnedToolDefinitions: forkSource?.toolDefinitions,
+					providerPromptCacheKey: forkSource?.promptCacheKey,
+					providerPromptCacheKeySource: forkSource ? "fork" : undefined,
 					// Subagents are short-lived; never schedule background warm requests.
 					cacheWarming: false,
 					toolNames,
@@ -4376,6 +4460,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
 					ircEnabled,
 					ircRoot: {},
+					forkSystemPrompt: forkSource?.systemPrompt,
 				},
 			};
 
@@ -4430,6 +4515,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				sessionManager.appendModelChange(formatModelStringWithRouting(model), retryFallbackRole);
 			}
 			sessionCreatedAt = performance.now();
+			if (forkSource) {
+				// The fork inherits the parent's todo list via session entries; clear runtime state
+				// and persist an empty edit so revival agrees (same as `/tan`).
+				session.setTodoPhases([]);
+				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
+			}
 
 			monitor.setActiveSession(session);
 			// Run-state notifications precede deferrable wire-level `agent_end`,
@@ -4579,7 +4670,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			readyAt = performance.now();
-			const outcome = await driveSessionToYield(session, monitor, task, { solutionSpace: options.solutionSpace });
+			// A fork's system prompt is the parent's; its role block and assignment ride the first
+			// user message. `session_init.task` above keeps the raw task.
+			const initialPrompt = forkSource
+				? prompt.render(subagentForkAssignmentTemplate, {
+						subagent: renderSubagentPrompt(sessionSpec.prompt, {
+							workPoolYieldItems: options.workPoolYieldItems ?? [],
+						}),
+						task,
+					})
+				: task;
+			const outcome = await driveSessionToYield(session, monitor, initialPrompt, {
+				solutionSpace: options.solutionSpace,
+			});
 			// Acceptance boundary (#11079): the run's final result is settled, so
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
 			// `running` before the (possibly slow) cleanup below.

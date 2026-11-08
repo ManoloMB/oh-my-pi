@@ -50,6 +50,7 @@ export default {
 			reset: opts.reset,
 			onChunk: opts.onChunk,
 			onStatus: opts.onStatus,
+			callScheduler: opts.callScheduler,
 			session: opts.session,
 			localRoots: resolveEvalUrlRoots(opts.session),
 		});

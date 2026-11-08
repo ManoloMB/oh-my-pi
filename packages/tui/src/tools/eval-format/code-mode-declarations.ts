@@ -1,61 +1,99 @@
 /**
- * Generate the TypeScript method signatures advertising eval-bridged tools
- * under Codex Code Mode (spliced into the `eval-code-mode.md` prompt),
- * mirroring codex-rs augment_tool_spec_for_code_mode.
+ * Generate the TypeScript declarations advertising eval-bridged tools: the
+ * Codex Code Mode prompt splices them in (mirroring codex-rs
+ * augment_tool_spec_for_code_mode), and plain eval serves them on demand at
+ * `xd://eval/tools`.
  */
+import { jsonSchemaToTypeScript } from "@oh-my-pi/pi-ai/utils/schema/typescript";
 import { arkToWireSchema, isArkSchema } from "@oh-my-pi/pi-ai/utils/schema/wire";
+import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
 
-interface JsonSchema {
-	type?: string;
-	properties?: Record<string, JsonSchema>;
-	required?: string[];
-	items?: JsonSchema;
-	enum?: unknown[];
+export interface CodeModeToolSpec {
+	name: string;
+	parameters: unknown;
+	/** Tool description; only its first line is rendered, as JSDoc. */
+	description?: string;
+	/** Shape of `details` on success; tools with one always resolve `{ text, details }`. */
+	outputSchema?: unknown;
 }
 
 const TS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const DESCRIPTION_MAX_CHARS = 160;
+const MEMBER_PAD = "  ";
 
-function tsType(schema: JsonSchema | undefined, depth: number): string {
-	if (!schema || depth > 2) return "unknown";
-	if (Array.isArray(schema.enum) && schema.enum.every(value => typeof value === "string")) {
-		return schema.enum.map(value => JSON.stringify(value)).join(" | ");
-	}
-	switch (schema.type) {
-		case "string":
-			return "string";
-		case "number":
-		case "integer":
-			return "number";
-		case "boolean":
-			return "boolean";
-		case "array": {
-			const item = tsType(schema.items, depth + 1);
-			// `"a" | "b"[]` parses as `"a" | ("b"[])`, so a union item needs parens.
-			return /[|&]/.test(item) ? `(${item})[]` : `${item}[]`;
-		}
-		case "object": {
-			if (!schema.properties) return "Record<string, unknown>";
-			const required = new Set(schema.required ?? []);
-			const entries = Object.entries(schema.properties).map(([key, value]) => {
-				const printedKey = TS_IDENTIFIER.test(key) ? key : JSON.stringify(key);
-				return `${printedKey}${required.has(key) ? "" : "?"}: ${tsType(value, depth + 1)}`;
-			});
-			return `{ ${entries.join("; ")} }`;
-		}
-		default:
-			return "unknown";
-	}
+function wireSchema(schema: unknown): Record<string, unknown> | undefined {
+	const wire = isArkSchema(schema) ? arkToWireSchema(schema) : schema;
+	return wire !== null && typeof wire === "object" && !Array.isArray(wire)
+		? (wire as Record<string, unknown>)
+		: undefined;
 }
 
-/** Format tool schemas as TypeScript declarations for code-mode discovery. */
-export function generateCodeModeDeclarations(tools: ReadonlyArray<{ name: string; parameters: unknown }>): string {
-	const lines = tools.map(tool => {
-		const printedName = TS_IDENTIFIER.test(tool.name) ? tool.name : JSON.stringify(tool.name);
-		const wire = isArkSchema(tool.parameters)
-			? (arkToWireSchema(tool.parameters) as JsonSchema)
-			: (tool.parameters as JsonSchema | undefined);
-		const args = wire?.type === "object" && wire.properties ? tsType(wire, 0) : "unknown";
-		return `  ${printedName}(args: ${args}): Promise<unknown>;`;
-	});
-	return lines.join("\n");
+/** Nests a rendered schema one level inside an interface body. */
+function memberType(schema: Record<string, unknown>): string {
+	return jsonSchemaToTypeScript(schema).replaceAll("\n", `\n${MEMBER_PAD}`);
+}
+
+function argsType(parameters: unknown): string {
+	const wire = wireSchema(parameters);
+	// Exotic roots (allOf, bare records) give the model nothing to fill in.
+	return wire?.type === "object" && wire.properties ? memberType(wire) : "unknown";
+}
+
+function outputType(outputSchema: unknown): string {
+	const json = outputSchema === undefined ? undefined : outputJsonSchema(outputSchema);
+	if (!isRecord(json)) return "string | { text: string; details?: unknown }";
+	return `{ text: string; details: ${memberType(json)} }`;
+}
+
+const outputJsonSchemaCache = new WeakMap<object, unknown>();
+
+/**
+ * JSON Schema for a tool's `outputSchema`. Unlike the closed model-facing
+ * argument wire, objects stay open: `details` routinely carries presentation
+ * fields beyond the documented contract.
+ */
+export function outputJsonSchema(schema: unknown): unknown {
+	if (!isArkSchema(schema)) return schema;
+	let json = outputJsonSchemaCache.get(schema);
+	if (json === undefined) {
+		const raw = schema.toJsonSchema({ target: "draft-2020-12", fallback: ctx => ctx.base }) as Record<
+			string,
+			unknown
+		>;
+		const { $schema: _dialect, ...rest } = raw;
+		json = rest;
+		outputJsonSchemaCache.set(schema, json);
+	}
+	return json;
+}
+
+function descriptionLine(description: string | undefined): string | undefined {
+	const first = description?.trim().split("\n", 1)[0]?.trim();
+	if (!first) return undefined;
+	const clipped = first.length > DESCRIPTION_MAX_CHARS ? `${first.slice(0, DESCRIPTION_MAX_CHARS - 1)}…` : first;
+	return clipped.replaceAll("*/", "* /");
+}
+
+/** Format tool schemas as self-contained TypeScript declarations for the `tool` proxy. */
+export function generateCodeModeDeclarations(tools: ReadonlyArray<CodeModeToolSpec>): string {
+	const args: string[] = [];
+	const outputs: string[] = [];
+	for (const tool of tools) {
+		const key = TS_IDENTIFIER.test(tool.name) ? tool.name : JSON.stringify(tool.name);
+		const doc = descriptionLine(tool.description);
+		if (doc) args.push(`${MEMBER_PAD}/** ${doc} */`);
+		args.push(`${MEMBER_PAD}${key}: ${argsType(tool.parameters)};`);
+		outputs.push(`${MEMBER_PAD}${key}: ${outputType(tool.outputSchema)};`);
+	}
+	return [
+		"interface ToolArgsMap {",
+		...args,
+		"}",
+		"interface ToolOutputMap {",
+		...outputs,
+		"}",
+		"type ToolName = keyof ToolOutputMap;",
+		'declare class ToolCallError extends Error { readonly name: "ToolCallError"; readonly toolName: ToolName; readonly text: string; readonly details?: unknown }',
+		"declare const tool: { [K in ToolName]: (args: ToolArgsMap[K]) => Promise<ToolOutputMap[K]> };",
+	].join("\n");
 }

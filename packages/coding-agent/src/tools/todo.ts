@@ -716,6 +716,22 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;
 	readonly parameters = todoSchema;
+	readonly outputSchema = type({
+		"+": "ignore",
+		"op?": "string",
+		phases: type({
+			name: "string",
+			tasks: type({
+				content: "string",
+				status: "'pending' | 'in_progress' | 'completed' | 'abandoned' | 'blocked'",
+				"blocker?": "string",
+				"details?": "string",
+				"notes?": "string[]",
+			}).array(),
+		}).array(),
+		storage: "'session' | 'memory'",
+		"completedTasks?": type({ phase: "string", content: "string" }).array(),
+	});
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 	// Raw args reach execute() on schema failure; resolveTodoParams re-validates

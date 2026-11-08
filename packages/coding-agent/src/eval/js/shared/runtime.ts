@@ -11,6 +11,7 @@ import * as vm from "node:vm";
 // load pi_natives (verified under `--no-addons`); the `@oh-my-pi/pi-utils` barrel loads it eagerly.
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
+import { ToolCallError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
 import { evalImageMetadata } from "../../types";
 import type { EvalPreludeSource } from "../worker-protocol";
@@ -743,6 +744,9 @@ export class JsRuntime {
 				context.finalExpressionSet = true;
 				context.finalExpressionValue = value;
 			},
+			// The bridge's own class (not a prelude copy) so `instanceof` holds for
+			// errors thrown in-process and those the worker rebuilds from a payload.
+			ToolCallError,
 			webcrypto: crypto,
 			// `process` is intentionally not overridden — user code gets the host worker's real
 			// `process` object. Subsetting it caused segfaults in workers that share state with

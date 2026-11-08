@@ -15,16 +15,42 @@ import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { resolveSpeculationLeadTokens } from "./speculation-lead";
 
 import { cfgSkillful } from "./settings";
-import { cfgSnapcompactShape, cfgSnapcompactSystemPrompt, cfgSnapcompactToolResults } from "./context-settings";
+import {
+	cfgCompactionAdaptiveReserve,
+	cfgSnapcompactShape,
+	cfgSnapcompactSystemPrompt,
+	cfgSnapcompactToolResults,
+} from "./context-settings";
+
+/**
+ * Configured policy for `model` with the session's observed-usage reserve
+ * applied, matching what the session's compaction decisions use.
+ */
+function resolveLiveCompactionSettings(
+	settings: ScopeLike,
+	model: Model | null | undefined,
+	adaptiveReserveTokens: number | undefined,
+) {
+	const configured = resolveModelCompactionSettings(settings, model);
+	if (
+		configured.reserveTokens === undefined &&
+		adaptiveReserveTokens !== undefined &&
+		cfgCompactionAdaptiveReserve.get(settings)
+	) {
+		return { ...configured, adaptiveReserveTokens };
+	}
+	return configured;
+}
 
 /** Resolve session policy before handing pure boundary arithmetic to the UI. */
 export function getSessionCompactionBoundaries(
 	settings: ScopeLike,
 	contextWindow: number,
 	model?: Model | null,
+	adaptiveReserveTokens?: number,
 ): CompactionBoundaries | null {
 	if (!(contextWindow > 0)) return null;
-	const configured = resolveModelCompactionSettings(settings, model);
+	const configured = resolveLiveCompactionSettings(settings, model, adaptiveReserveTokens);
 	const compaction: CompactionSettings = configured;
 	if (!compaction.enabled || compaction.strategy === "off") return null;
 	const threshold = resolveThresholdTokens(contextWindow, compaction);
@@ -56,7 +82,12 @@ export function computeSessionContextBreakdown(
 		}
 	}
 	return computeContextBreakdown(session, {
-		compaction: resolveModelCompactionSettings(session.settings, session.model),
+		compaction: resolveLiveCompactionSettings(
+			session.settings,
+			session.model,
+			// Display-only and protocol replicas may not carry live maintenance state.
+			session.compactionAdaptiveReserveTokens?.(),
+		),
 		sourceRevision: session.settings.revision,
 		skillful: cfgSkillful.get(session.settings),
 		snapcompact,

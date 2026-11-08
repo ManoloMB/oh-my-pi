@@ -2249,6 +2249,8 @@ export interface TaskParams {
 	context?: string;
 	/** Run in an isolated worktree (flat form; per-item in batch form). */
 	isolated?: boolean;
+	/** Children inherit the parent conversation and its prompt cache (top-level only). */
+	fork?: boolean;
 }
 
 /**

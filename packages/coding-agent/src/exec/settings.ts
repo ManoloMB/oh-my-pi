@@ -130,6 +130,19 @@ export const cfgBashGitGuard = register({
 	},
 });
 
+export const cfgBashRecoveryHints = register({
+	id: "bash.recoveryHints",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "shell",
+		group: "Bash",
+		label: "Recovery Hints",
+		description:
+			"Append a recovery hint to recognizable bash failures and flag exit codes masked by pipes or fallbacks",
+	},
+});
+
 export const cfgBashPatterns = register({
 	id: "bash.patterns",
 	type: "array",

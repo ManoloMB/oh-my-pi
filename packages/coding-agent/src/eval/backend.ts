@@ -3,6 +3,7 @@ import { contextLocalProtocolOptions } from "../internal-urls/context";
 import type { OutputArtifactError } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import type { ToolSession } from "../tools";
 import type { BackendProbeOptions } from "./probe";
+import type { EvalCallScheduler } from "./call-scheduler";
 import type { EvalLanguage, EvalStatusEvent } from "@oh-my-pi/pi-tui/tools/eval";
 import type { EvalDisplayOutput } from "./types";
 
@@ -38,6 +39,8 @@ export interface ExecutorBackendExecOptions {
 	 * progress (e.g. `agent()` subagents) into the UI mid-execution.
 	 */
 	onStatus?: (event: EvalStatusEvent) => void;
+	/** Per-cell scheduler for session tool calls made from the cell (parallelism + call allowance). */
+	callScheduler?: EvalCallScheduler;
 }
 
 /** Result returned by a backend's execute(). */

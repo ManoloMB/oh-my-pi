@@ -187,12 +187,15 @@ export interface CompactionSettings {
 	/**
 	 * Tokens reserved below the context window for the next prompt + response.
 	 *
-	 * Leave unset to use {@link DEFAULT_RESERVE_TOKENS}; the unset state is the
-	 * provenance signal that lets small-window recovery replace the default with
-	 * a proportional reserve (see {@link resolveBudgetReserveTokens}). An
-	 * explicit value — even one equal to the default — is always honored.
+	 * Leave unset to use the adaptive reserve (when present) or the default
+	 * (`max(15% of the window, {@link DEFAULT_RESERVE_TOKENS})`); the unset state
+	 * is the provenance signal that lets small-window recovery replace the
+	 * default with a proportional reserve (see {@link resolveBudgetReserveTokens}).
+	 * An explicit value — even one equal to the default — is always honored.
 	 */
 	reserveTokens?: number;
+	/** Reserve derived from observed usage; only applied when `reserveTokens` is unset. */
+	adaptiveReserveTokens?: number;
 	keepRecentTokens: number;
 	autoContinue?: boolean;
 	remoteEnabled?: boolean;
@@ -319,12 +322,65 @@ export function getLastAssistantUsage(entries: SessionEntry[]): Usage | undefine
 	return undefined;
 }
 
+export const ADAPTIVE_RESERVE_MIN_SAMPLES = 8;
+export const ADAPTIVE_RESERVE_WINDOW = 64;
+export const ADAPTIVE_RESERVE_HEADROOM_TOKENS = 8192;
+
+function nearestRankP95(samples: number[]): number {
+	if (samples.length === 0) return 0;
+	const sorted = samples.toSorted((a, b) => a - b);
+	return sorted[Math.ceil(0.95 * sorted.length) - 1];
+}
+
 /**
- * Effective reserve: at least 15% of context window or the configured floor
- * (defaulting to {@link DEFAULT_RESERVE_TOKENS} when unset), whichever is larger.
+ * Reserve sized from the session's observed per-turn output and context growth
+ * (p95 of each over the last {@link ADAPTIVE_RESERVE_WINDOW} turns plus
+ * headroom), clamped to `[DEFAULT_RESERVE_TOKENS, max(DEFAULT_RESERVE_TOKENS, 15% of the window)]`
+ * so it never compacts earlier than the proportional default. Returns
+ * `undefined` until {@link ADAPTIVE_RESERVE_MIN_SAMPLES} assistant turns exist.
+ */
+export function estimateAdaptiveReserveTokens(
+	entries: readonly SessionEntry[],
+	contextWindow: number,
+): number | undefined {
+	if (contextWindow <= 0) return undefined;
+	const outputs: number[] = [];
+	const growths: number[] = [];
+	let previousContext: number | undefined;
+	for (const entry of entries) {
+		if (entry.type === "compaction") {
+			previousContext = undefined;
+			continue;
+		}
+		if (entry.type !== "message") continue;
+		const usage = getAssistantUsage(entry.message);
+		if (!usage) continue;
+		const context = calculateContextTokens(usage);
+		outputs.push(usage.output);
+		if (outputs.length > ADAPTIVE_RESERVE_WINDOW) outputs.shift();
+		if (previousContext !== undefined) {
+			growths.push(Math.max(0, context - previousContext));
+			if (growths.length > ADAPTIVE_RESERVE_WINDOW) growths.shift();
+		}
+		previousContext = context;
+	}
+	if (outputs.length < ADAPTIVE_RESERVE_MIN_SAMPLES) return undefined;
+	const raw = nearestRankP95(outputs) + nearestRankP95(growths) + ADAPTIVE_RESERVE_HEADROOM_TOKENS;
+	const ceiling = Math.max(DEFAULT_RESERVE_TOKENS, Math.floor(contextWindow * 0.15));
+	return Math.min(Math.max(raw, DEFAULT_RESERVE_TOKENS), ceiling);
+}
+
+/**
+ * Effective reserve. An explicit `reserveTokens` is floored at 15% of the
+ * context window; otherwise the adaptive reserve applies when present; otherwise
+ * `max(15% of the window, {@link DEFAULT_RESERVE_TOKENS})`.
  */
 export function effectiveReserveTokens(contextWindow: number, settings: CompactionSettings): number {
-	return Math.max(Math.floor(contextWindow * 0.15), settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS);
+	if (settings.reserveTokens !== undefined) {
+		return Math.max(Math.floor(contextWindow * 0.15), settings.reserveTokens);
+	}
+	if (settings.adaptiveReserveTokens !== undefined) return settings.adaptiveReserveTokens;
+	return Math.max(Math.floor(contextWindow * 0.15), DEFAULT_RESERVE_TOKENS);
 }
 
 /**
@@ -662,6 +718,46 @@ function createSummarizationError(prefix: string, response: AssistantMessage): E
 	return response.errorStatus === undefined
 		? new Error(text)
 		: new AIError.ProviderHttpError(text, response.errorStatus);
+}
+
+interface SummaryAttempt {
+	response: AssistantMessage;
+	maxTokens: number | undefined;
+}
+
+interface SummaryRequestOverrides {
+	maxTokens: number | undefined;
+	reasoning: Effort | undefined;
+}
+
+/**
+ * Run a summary request; when the provider stops at the output-token limit,
+ * retry exactly once with a larger budget and no reasoning (thinking is what
+ * starves the visible output).
+ */
+async function completeWithTruncationRetry(
+	model: Model,
+	base: SummaryRequestOverrides,
+	run: (overrides: SummaryRequestOverrides) => Promise<AssistantMessage>,
+): Promise<SummaryAttempt> {
+	const response = await run(base);
+	if (response.stopReason !== "length") return { response, maxTokens: base.maxTokens };
+	const retryMaxTokens =
+		base.maxTokens === undefined
+			? undefined
+			: Math.max(base.maxTokens, Math.min(base.maxTokens * 2, model.maxTokens ?? base.maxTokens * 2));
+	logger.warn("Compaction summary truncated; retrying without reasoning", {
+		model: model.id,
+		maxTokens: base.maxTokens,
+		retryMaxTokens,
+	});
+	return { response: await run({ maxTokens: retryMaxTokens, reasoning: undefined }), maxTokens: retryMaxTokens };
+}
+
+function createTruncatedSummaryError(prefix: string, maxTokens: number | undefined): Error {
+	return new Error(
+		`${prefix}: summary output truncated (stopReason length, maxTokens ${maxTokens ?? "provider default"})`,
+	);
 }
 
 function shouldRetryHandoffWithAutoToolChoice(response: AssistantMessage): boolean {
@@ -1018,33 +1114,40 @@ async function summarizeConversationWindow(
 		return remote.summary;
 	}
 
-	const response = await instrumentedCompleteSimple(
+	const attempt = await completeWithTruncationRetry(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
-		{
-			maxTokens,
-			signal,
-			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
-			initiatorOverride: options?.initiatorOverride,
-			metadata: options?.metadata,
-			fetch: options?.fetch,
-			sessionId: options?.sessionId,
-			promptCacheKey: options?.promptCacheKey,
-			providerSessionState: options?.providerSessionState,
-			codexCompaction: localCodexCompaction(options),
-		},
-		{
-			telemetry: options?.telemetry,
-			oneshotKind: "compaction_summary",
-			completeImpl: options?.completeImpl,
-			retry: summaryOneshotRetry(options),
-		},
+		{ maxTokens, reasoning: resolveCompactionEffort(model, options?.thinkingLevel) },
+		overrides =>
+			instrumentedCompleteSimple(
+				model,
+				{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+				{
+					maxTokens: overrides.maxTokens,
+					signal,
+					apiKey,
+					reasoning: overrides.reasoning,
+					initiatorOverride: options?.initiatorOverride,
+					metadata: options?.metadata,
+					fetch: options?.fetch,
+					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
+					providerSessionState: options?.providerSessionState,
+					codexCompaction: localCodexCompaction(options),
+				},
+				{
+					telemetry: options?.telemetry,
+					oneshotKind: "compaction_summary",
+					completeImpl: options?.completeImpl,
+					retry: summaryOneshotRetry(options),
+				},
+			),
 	);
+	const response = attempt.response;
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Summarization failed", response);
 	}
+	if (response.stopReason === "length") throw createTruncatedSummaryError("Summarization failed", attempt.maxTokens);
 
 	const textContent = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -1129,28 +1232,38 @@ export async function generateHandoffFromContext(
 	model: Model,
 	options: HandoffFromContextOptions,
 ): Promise<string> {
-	const requestOptions = {
-		...options.streamOptions,
-		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-		toolChoice: "none" as const,
-	};
-	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
-		telemetry: options.telemetry,
-		oneshotKind: "handoff",
-		completeImpl: options.completeImpl,
-		retry: {},
-	});
-	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
-		response = await instrumentedCompleteSimple(
-			model,
-			context,
-			{ ...requestOptions, toolChoice: "auto" },
-			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
-		);
-	}
+	const attempt = await completeWithTruncationRetry(
+		model,
+		{ maxTokens: options.streamOptions.maxTokens, reasoning: resolveCompactionEffort(model, options.thinkingLevel) },
+		async overrides => {
+			const requestOptions = {
+				...options.streamOptions,
+				maxTokens: overrides.maxTokens,
+				reasoning: overrides.reasoning,
+				toolChoice: "none" as const,
+			};
+			const first = await instrumentedCompleteSimple(model, context, requestOptions, {
+				telemetry: options.telemetry,
+				oneshotKind: "handoff",
+				completeImpl: options.completeImpl,
+				retry: {},
+			});
+			if (first.stopReason !== "error" || !shouldRetryHandoffWithAutoToolChoice(first)) return first;
+			return instrumentedCompleteSimple(
+				model,
+				context,
+				{ ...requestOptions, toolChoice: "auto" },
+				{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
+			);
+		},
+	);
+	const response = attempt.response;
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Handoff generation failed", response);
+	}
+	if (response.stopReason === "length") {
+		throw createTruncatedSummaryError("Handoff generation failed", attempt.maxTokens);
 	}
 
 	return response.content
@@ -1229,36 +1342,42 @@ async function generateShortSummary(
 		return remote.summary;
 	}
 
-	const response = await instrumentedCompleteSimple(
+	const { response } = await completeWithTruncationRetry(
 		model,
-		{
-			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
-			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
-		},
-		{
-			maxTokens,
-			signal,
-			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
-			initiatorOverride: options?.initiatorOverride,
-			metadata: options?.metadata,
-			fetch: options?.fetch,
-			sessionId: options?.sessionId,
-			promptCacheKey: options?.promptCacheKey,
-			providerSessionState: options?.providerSessionState,
-			codexCompaction: localCodexCompaction(options),
-		},
-		{
-			telemetry: options?.telemetry,
-			oneshotKind: "compaction_short_summary",
-			completeImpl: options?.completeImpl,
-			retry: summaryOneshotRetry(options),
-		},
+		{ maxTokens, reasoning: resolveCompactionEffort(model, options?.thinkingLevel) },
+		overrides =>
+			instrumentedCompleteSimple(
+				model,
+				{
+					systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
+					messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
+				},
+				{
+					maxTokens: overrides.maxTokens,
+					signal,
+					apiKey,
+					reasoning: overrides.reasoning,
+					initiatorOverride: options?.initiatorOverride,
+					metadata: options?.metadata,
+					fetch: options?.fetch,
+					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
+					providerSessionState: options?.providerSessionState,
+					codexCompaction: localCodexCompaction(options),
+				},
+				{
+					telemetry: options?.telemetry,
+					oneshotKind: "compaction_short_summary",
+					completeImpl: options?.completeImpl,
+					retry: summaryOneshotRetry(options),
+				},
+			),
 	);
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Short summary failed", response);
 	}
+	// A still-truncated short summary is only a display blurb; failing the whole compaction for it would regress.
 
 	return response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -2194,32 +2313,41 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
-	const response = await instrumentedCompleteSimple(
+	const attempt = await completeWithTruncationRetry(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
-		{
-			maxTokens,
-			signal,
-			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
-			initiatorOverride: options?.initiatorOverride,
-			metadata: options?.metadata,
-			fetch: options?.fetch,
-			sessionId: options?.sessionId,
-			promptCacheKey: options?.promptCacheKey,
-			providerSessionState: options?.providerSessionState,
-			codexCompaction: localCodexCompaction(options),
-		},
-		{
-			telemetry: options?.telemetry,
-			oneshotKind: "compaction_turn_prefix",
-			completeImpl: options?.completeImpl,
-			retry: summaryOneshotRetry(options),
-		},
+		{ maxTokens, reasoning: resolveCompactionEffort(model, options?.thinkingLevel) },
+		overrides =>
+			instrumentedCompleteSimple(
+				model,
+				{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+				{
+					maxTokens: overrides.maxTokens,
+					signal,
+					apiKey,
+					reasoning: overrides.reasoning,
+					initiatorOverride: options?.initiatorOverride,
+					metadata: options?.metadata,
+					fetch: options?.fetch,
+					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
+					providerSessionState: options?.providerSessionState,
+					codexCompaction: localCodexCompaction(options),
+				},
+				{
+					telemetry: options?.telemetry,
+					oneshotKind: "compaction_turn_prefix",
+					completeImpl: options?.completeImpl,
+					retry: summaryOneshotRetry(options),
+				},
+			),
 	);
+	const response = attempt.response;
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Turn prefix summarization failed", response);
+	}
+	if (response.stopReason === "length") {
+		throw createTruncatedSummaryError("Turn prefix summarization failed", attempt.maxTokens);
 	}
 
 	return response.content

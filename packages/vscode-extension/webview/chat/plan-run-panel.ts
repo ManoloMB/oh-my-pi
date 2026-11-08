@@ -1,7 +1,7 @@
 /**
- * Progress of an approved plan, behind the plan mode button. While omp executes
- * a plan approved in the chat, the button stays lit with a "done/total" badge,
- * and clicking it opens this popover instead of re-entering plan mode: the
+ * Progress of an approved plan, behind the plan mode button. Approving leaves
+ * plan mode, so the button is no longer pressed; while omp executes the plan it
+ * shows a "done/total" badge, and clicking it opens this popover instead of re-entering plan mode: the
  * agent's step list by phase, the step in progress highlighted, and buttons to
  * open the plan, stop tracking it, or start a new plan.
  */

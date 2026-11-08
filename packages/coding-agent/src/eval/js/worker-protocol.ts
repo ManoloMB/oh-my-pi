@@ -32,6 +32,11 @@ export interface RunErrorPayload {
 	stack?: string;
 	isAbort?: boolean;
 	isToolError?: boolean;
+	/** Set for a failed session tool call; the worker rebuilds a `ToolCallError` from the fields below. */
+	isToolCallError?: boolean;
+	toolName?: string;
+	text?: string;
+	details?: unknown;
 }
 
 export type ToolReply = { ok: true; value: unknown } | { ok: false; error: RunErrorPayload };

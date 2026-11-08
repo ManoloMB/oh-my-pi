@@ -10,12 +10,14 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { BlobStore, blobStagingPath } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { openSessionSearchDbAt } from "@oh-my-pi/pi-coding-agent/session/session-search/schema";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import {
 	getAgentDir,
 	getBlobsDir,
 	getCustomSessionFilesDir,
 	getHistoryDbPath,
+	getSessionSearchDbPath,
 	getSessionsDir,
 	getTerminalSessionsDir,
 	hashPath,
@@ -1025,6 +1027,14 @@ describe("runGcCommand cold-session archive", () => {
 		db.run("INSERT INTO history (prompt, session_id) VALUES ('new prompt', 'keep-me')");
 		db.run("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
 		db.close();
+		const searchDb = openSessionSearchDbAt(getSessionSearchDbPath(root));
+		const insertDoc = searchDb.prepare(
+			"INSERT INTO session_docs (session_id, cwd, line_no, type, time, text, char_len) VALUES (?, '/p', 2, 'assistant', '2026-01-01T00:00:00Z', ?, 4)",
+		);
+		insertDoc.run("archive-me", "old answer");
+		insertDoc.run("keep-me", "new answer");
+		insertDoc.finalize();
+		searchDb.close();
 
 		const result = await runGcCommand({
 			flags: {
@@ -1043,6 +1053,13 @@ describe("runGcCommand cold-session archive", () => {
 			.query("SELECT h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid ORDER BY h.id")
 			.all() as Array<{ session_id: string }>;
 		check.close();
+		const searchCheck = new Database(getSessionSearchDbPath(root));
+		const docRows = searchCheck.query("SELECT session_id FROM session_docs ORDER BY id").all() as Array<{
+			session_id: string;
+		}>;
+		searchCheck.close();
+		expect(result.archive?.sessionDocsDeleted).toBe(1);
+		expect(docRows.map(row => row.session_id)).toEqual(["keep-me"]);
 
 		expect(result.archive?.historyRowsDeleted).toBe(1);
 		expect(result.archive?.ftsRebuilt).toBe(true);

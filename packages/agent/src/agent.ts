@@ -19,6 +19,7 @@ import {
 	streamSimple,
 	type TextContent,
 	type ThinkingBudgets,
+	type Tool,
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
@@ -127,6 +128,14 @@ export interface AgentOptions {
 	 * telemetry capture/provider send.
 	 */
 	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
+
+	/**
+	 * Wire tool definitions (post-`transformProviderContext`) substituted by name for the
+	 * tools this Agent sends, so a forked child declares byte-identical tools to its parent
+	 * and reuses the parent's provider prompt cache. Also seeds the sent-definition record
+	 * so parent tools absent from this Agent resolve as inactive (Anthropic `tool_removal`).
+	 */
+	pinnedToolDefinitions?: readonly Tool[];
 
 	/**
 	 * Steering mode: "all" = send all steering messages at once, "one-at-a-time" = one per turn
@@ -420,6 +429,7 @@ export class Agent {
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 	#transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 	#sentToolDefinitions = new SentToolDefinitions();
+	#pinnedToolDefinitions: ReadonlyMap<string, Tool> | undefined;
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
 	#queuedMessageClaims: Partial<Record<QueuedMessageQueue, QueuedMessageClaim>> = {};
@@ -605,6 +615,10 @@ export class Agent {
 		this.#telemetry = opts.telemetry;
 		this.#appendOnlyContext = opts.appendOnlyContext;
 		this.#transformProviderContext = opts.transformProviderContext;
+		if (opts.pinnedToolDefinitions?.length) {
+			this.#sentToolDefinitions.record(opts.pinnedToolDefinitions);
+			this.#pinnedToolDefinitions = new Map(opts.pinnedToolDefinitions.map(tool => [tool.name, tool]));
+		}
 	}
 
 	/**
@@ -627,6 +641,11 @@ export class Agent {
 	 */
 	get promptCacheKey(): string | undefined {
 		return this.#promptCacheKey;
+	}
+
+	/** Wire tool definitions this Agent has sent (plus pinned ones), for seeding a forked child. */
+	getSentToolDefinitions(): Tool[] {
+		return this.#sentToolDefinitions.snapshot();
 	}
 
 	/**
@@ -925,6 +944,10 @@ export class Agent {
 				}) ?? []);
 		let context: Context = { systemPrompt, messages, tools };
 		if (this.#transformProviderContext) context = await this.#transformProviderContext(context, model);
+		const pinned = this.#pinnedToolDefinitions;
+		if (pinned && context.tools) {
+			context = { ...context, tools: context.tools.map(tool => pinned.get(tool.name) ?? tool) };
+		}
 		// Side requests reuse the main loop's sent definitions without recording their own.
 		if (context.tools?.length) {
 			const inactiveTools = this.#sentToolDefinitions.inactiveFor(context.messages, context.tools);
@@ -1869,6 +1892,7 @@ export class Agent {
 			convertToLlm: this.#convertToLlm,
 			transformProviderContext: this.#transformProviderContext,
 			sentToolDefinitions: this.#sentToolDefinitions,
+			pinnedToolDefinitions: this.#pinnedToolDefinitions,
 			transformContext: this.#transformContext,
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,

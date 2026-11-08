@@ -12,7 +12,7 @@ afterEach(() => {
 	mock.restore();
 });
 
-function makeSession(): ToolSession {
+function makeSession(overrides: Record<string, unknown> = {}): ToolSession {
 	return {
 		cwd: "/tmp",
 		hasUI: false,
@@ -27,6 +27,7 @@ function makeSession(): ToolSession {
 			"astEdit.enabled": false,
 			"grep.enabled": false,
 			"glob.enabled": false,
+			...overrides,
 		}),
 		getClientBridge: () => undefined,
 	} as unknown as ToolSession;
@@ -144,6 +145,68 @@ describe("BashTool execution results", () => {
 			expect(result.isError).toBeUndefined();
 			expect(stdout).toBe(scenario.expected);
 		}
+	});
+});
+
+describe("BashTool recovery hints", () => {
+	function mockRun(exitCode: number, output: string): void {
+		spyOn(Shell.prototype, "run").mockImplementation(function (this: Shell, _options, onChunk) {
+			onChunk?.(null, output);
+			return Promise.resolve({ exitCode, cancelled: false, timedOut: false, workingDir: process.cwd() });
+		});
+	}
+
+	const textOf = (result: { content: { type: string; text?: string }[] }): string =>
+		result.content.find(c => c.type === "text")?.text ?? "";
+
+	it("appends the missing-program hint to a real exit 127", async () => {
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-127", { command: "omp-no-such-binary-xyz" });
+
+		expect(result.details?.exitCode).toBe(127);
+		expect(textOf(result)).toContain("[Hint: The shell could not find the program");
+	});
+
+	it("appends the Python import hint for ModuleNotFoundError", async () => {
+		mockRun(1, "Traceback (most recent call last):\nModuleNotFoundError: No module named 'foo'\n");
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-py", { command: "python app.py" });
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("[Hint: Python could not import a module.");
+	});
+
+	it("flags a pipe tail that masks a failing run without changing the result status", async () => {
+		mockRun(0, "FAILED tests/test_a.py::test_x\n1 failed, 3 passed\n");
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-masked", { command: "pytest | tail -5" });
+
+		expect(result.isError).toBeUndefined();
+		expect(textOf(result)).toContain("Treat this run as FAILED");
+	});
+
+	it("does not flag the same failing output without a masking pipe", async () => {
+		mockRun(0, "FAILED tests/test_a.py::test_x\n1 failed, 3 passed\n");
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-unmasked", { command: "pytest" });
+
+		expect(textOf(result)).not.toContain("[Hint:");
+	});
+
+	it("does not flag zero failure counts", async () => {
+		mockRun(0, "0 failed, 3 passed\n");
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-zero", { command: "pytest | tail -5" });
+
+		expect(textOf(result)).not.toContain("[Hint:");
+	});
+
+	it("omits hints when bash.recoveryHints is off", async () => {
+		const tool = new BashTool(makeSession({ "bash.recoveryHints": false }));
+		const result = await tool.execute("call-127-off", { command: "omp-no-such-binary-xyz" });
+
+		expect(result.details?.exitCode).toBe(127);
+		expect(textOf(result)).not.toContain("[Hint:");
 	});
 });
 

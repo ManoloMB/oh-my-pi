@@ -9,6 +9,7 @@ import {
 	resolveOutputSinkHeadBytes,
 } from "../tools/output-meta";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
+import type { EvalCallScheduler } from "./call-scheduler";
 import type { JsStatusEvent } from "./js/shared/types";
 import type { KernelDisplayOutput } from "./py/display";
 import { registerPyToolBridge } from "./py/tool-bridge";
@@ -74,6 +75,8 @@ export interface KernelExecutorBaseOptions {
 	onStatus?: (event: JsStatusEvent) => void;
 	emitStatus?: (event: JsStatusEvent) => void;
 	toolSession?: ToolSession;
+	/** Per-cell scheduler for session tool calls the kernel makes through the bridge. */
+	callScheduler?: EvalCallScheduler;
 	bridgeSessionId?: string;
 	artifactId?: string;
 	artifactPath?: string;
@@ -507,6 +510,7 @@ export async function executeWithKernelBase<
 					abortRequested: () => {
 						return abortShield.abortRequested;
 					},
+					scheduler: options.callScheduler,
 				})
 			: null;
 

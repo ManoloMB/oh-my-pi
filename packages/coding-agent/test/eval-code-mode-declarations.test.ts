@@ -6,7 +6,7 @@ import { EvalTool } from "../src/tools/eval";
 import { generateCodeModeDeclarations } from "@oh-my-pi/pi-tui/tools/eval-format/code-mode-declarations";
 
 describe("generateCodeModeDeclarations", () => {
-	test("emits a declare-const block with typed signatures", () => {
+	test("emits self-contained args/output maps and the typed tool proxy", () => {
 		const out = generateCodeModeDeclarations([
 			{
 				name: "read",
@@ -16,18 +16,20 @@ describe("generateCodeModeDeclarations", () => {
 					required: ["path"],
 				},
 			},
-			{
-				name: "grep",
-				parameters: {
-					type: "object",
-					properties: { pattern: { type: "string" }, case: { type: "boolean" } },
-					required: ["pattern"],
-				},
-			},
 		]);
 		expect(out.split("\n")).toEqual([
-			"  read(args: { path: string; limit?: number }): Promise<unknown>;",
-			"  grep(args: { pattern: string; case?: boolean }): Promise<unknown>;",
+			"interface ToolArgsMap {",
+			"  read: {",
+			"    path: string;",
+			"    limit?: number;",
+			"  };",
+			"}",
+			"interface ToolOutputMap {",
+			"  read: string | { text: string; details?: unknown };",
+			"}",
+			"type ToolName = keyof ToolOutputMap;",
+			'declare class ToolCallError extends Error { readonly name: "ToolCallError"; readonly toolName: ToolName; readonly text: string; readonly details?: unknown }',
+			"declare const tool: { [K in ToolName]: (args: ToolArgsMap[K]) => Promise<ToolOutputMap[K]> };",
 		]);
 	});
 	test("enums become literal unions", () => {
@@ -39,7 +41,7 @@ describe("generateCodeModeDeclarations", () => {
 		]);
 		expect(out).toContain('op: "init" | "done"');
 	});
-	test("union item types are parenthesized inside arrays", () => {
+	test("union item types stay grouped inside arrays", () => {
 		const out = generateCodeModeDeclarations([
 			{
 				name: "chmod",
@@ -50,7 +52,7 @@ describe("generateCodeModeDeclarations", () => {
 				},
 			},
 		]);
-		expect(out).toContain('modes: ("read" | "write")[]');
+		expect(out).toContain('modes: Array<"read" | "write">');
 	});
 	test("non-identifier property keys stay quoted", () => {
 		const out = generateCodeModeDeclarations([
@@ -63,11 +65,45 @@ describe("generateCodeModeDeclarations", () => {
 	});
 	test("quotes non-identifier tool names", () => {
 		const out = generateCodeModeDeclarations([{ name: "my-tool", parameters: { type: "object" } }]);
-		expect(out).toContain('"my-tool"(args: unknown): Promise<unknown>;');
+		expect(out).toContain('  "my-tool": unknown;');
 	});
 	test("exotic schemas degrade to unknown without throwing", () => {
 		const out = generateCodeModeDeclarations([{ name: "weird", parameters: { allOf: [{ type: "string" }] } }]);
-		expect(out).toContain("weird(args: unknown): Promise<unknown>;");
+		expect(out).toContain("  weird: unknown;");
+	});
+	test("renders nested argument types at any depth", () => {
+		const out = generateCodeModeDeclarations([
+			{
+				name: "deep",
+				parameters: type({ a: { b: { c: { d: "string" } } } }),
+			},
+		]);
+		expect(out).toContain("d: string;");
+		expect(out).not.toContain("unknown;\n");
+	});
+	test("an outputSchema types the resolved value as { text, details }", () => {
+		const out = generateCodeModeDeclarations([
+			{
+				name: "glob",
+				parameters: type({ pattern: "string" }),
+				outputSchema: type({ "fileCount?": "number", "files?": "string[]" }),
+			},
+		]);
+		expect(out).toContain(
+			"  glob: { text: string; details: {\n    fileCount?: number;\n    files?: string[];\n  } };",
+		);
+		expect(out).not.toContain("glob: string |");
+	});
+	test("the first description line becomes one-line JSDoc", () => {
+		const out = generateCodeModeDeclarations([
+			{
+				name: "grep",
+				parameters: type({ pattern: "string" }),
+				description: "Search file contents by regex */ safely\nSecond line is dropped.",
+			},
+		]);
+		expect(out).toContain("  /** Search file contents by regex * / safely */\n  grep: {");
+		expect(out).not.toContain("Second line");
 	});
 });
 
@@ -89,8 +125,8 @@ test("EvalTool advertises only tools authorized for its bridge", () => {
 
 	const description = new EvalTool(session).description;
 
-	expect(description).toContain("read(args:");
-	expect(description).not.toContain("write(args:");
+	expect(description).toContain("\n  read: {");
+	expect(description).not.toContain("\n  write: {");
 });
 
 test("EvalTool omits tools the model can still call directly", () => {
@@ -113,8 +149,8 @@ test("EvalTool omits tools the model can still call directly", () => {
 
 	const description = new EvalTool(session).description;
 
-	expect(description).toContain("read(args:");
-	expect(description).not.toContain("write(args:");
+	expect(description).toContain("\n  read: {");
+	expect(description).not.toContain("\n  write: {");
 });
 
 test("EvalTool advertises bridged tool declarations only while Code Mode is active", () => {
@@ -146,8 +182,9 @@ test("EvalTool advertises bridged tool declarations only while Code Mode is acti
 		getCodeModeDirectToolNames: () => ["eval"],
 	} as unknown as ToolSession);
 	const active = activeTool.description;
-	expect(active).toContain("declare const tool: {");
-	expect(active).toContain("read(args:");
+	expect(active).toContain("declare const tool: { [K in ToolName]");
+	expect(active).toContain("\n  read: {");
+	expect(active).toContain("rejects with `ToolCallError`");
 	expect(active).toContain("declare const fixturePreludeDeclaration: true;");
 
 	preludeEnabled = false;
@@ -158,8 +195,39 @@ test("EvalTool advertises bridged tool declarations only while Code Mode is acti
 		getCodeModeDirectToolNames: () => undefined,
 	} as unknown as ToolSession).description;
 	expect(inactive).not.toContain("declare const tool");
-	expect(inactive).not.toContain("read(args:");
+	expect(inactive).not.toContain("\n  read: {");
 	expect(inactive).not.toContain("fixturePreludeDeclaration");
+	// Plain eval points at the typed signatures instead of paying for them per request.
+	expect(inactive).toContain("xd://eval/tools");
+});
+
+test("EvalTool serves typed bridge signatures as the xd://eval/tools topic", () => {
+	const glob = {
+		name: "glob",
+		description: "Find files by glob\nMore detail.",
+		parameters: type({ pattern: "string" }),
+		outputSchema: type({ "fileCount?": "number" }),
+	};
+	const read = { name: "read", parameters: type({ path: "string" }) };
+	const session = {
+		cwd: "/tmp",
+		hasUI: false,
+		getSessionFile: () => null,
+		settings: Settings.isolated(),
+		toolRegistry: new Map<string, object>([
+			["glob", glob],
+			["read", read],
+		]),
+		getEvalBridgeToolNames: () => ["eval", "glob", "read"],
+	} as unknown as ToolSession;
+
+	const topic = new EvalTool(session).docTopics().tools;
+
+	expect(topic).toContain("raises `ToolCallError` (`tool_name`, `text`, `details`)");
+	expect(topic).toContain("  /** Find files by glob */\n  glob: {");
+	expect(topic).toContain("  glob: { text: string; details: {\n    fileCount?: number;\n  } };");
+	expect(topic).toContain("  read: string | { text: string; details?: unknown };");
+	expect(topic).not.toContain("More detail.");
 });
 
 test("EvalTool withholds Code Mode transport support when the JS backend is disabled", () => {

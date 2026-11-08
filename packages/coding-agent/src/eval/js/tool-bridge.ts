@@ -1,15 +1,22 @@
-import { type AgentTool, type AgentToolResult, validateAgentToolArguments } from "@oh-my-pi/pi-agent-core";
-import { type ImageContent, toolWireSchema } from "@oh-my-pi/pi-ai";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import {
+	type AgentTool,
+	type AgentToolResult,
+	resolveToolConcurrencyMode,
+	validateAgentToolArguments,
+} from "@oh-my-pi/pi-agent-core";
+import { type ImageContent, type TSchema, toolWireSchema, validateJsonSchemaValue } from "@oh-my-pi/pi-ai";
+import { outputJsonSchema } from "@oh-my-pi/pi-tui/tools/eval-format/code-mode-declarations";
+import { ToolCallError, ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type { ToolSession } from "../../tools";
 import { committedTodoPhases } from "../../tools/todo";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { schemaDeclaresIntentField } from "../../utils/tool-schema";
 import { findEnabledEvalPrelude, invokeEvalPrelude } from "../preludes";
 import { EVAL_AGENT_BRIDGE_NAME, type EvalAgentHandleResult, runEvalAgent } from "../agent-bridge";
 import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
 import { withBridgeTimeoutPause } from "../bridge-timeout";
+import type { EvalCallScheduler } from "../call-scheduler";
 import { EVAL_COMPLETION_BRIDGE_NAME, type EvalCompletionHandleResult, runEvalCompletion } from "../completion-bridge";
 import {
 	EVAL_JUDGMENT_BATCH_BRIDGE_NAME,
@@ -40,6 +47,14 @@ export interface ToolBridgeOptions {
 	emitStatus?: (event: JsStatusEvent) => void;
 	identity?: RuntimeCallIdentity;
 	shadowCell?: EvalShadowCellSession;
+	/** Per-cell call scheduler; absent for host-internal bridges (no limits). */
+	scheduler?: EvalCallScheduler;
+}
+
+interface BridgedToolValue {
+	text: string;
+	details?: unknown;
+	images?: Omit<ImageContent, "type">[];
 }
 
 type ToolValue =
@@ -53,15 +68,20 @@ type ToolValue =
 	| EvalWorkpoolResult
 	| { items: EvalHandleSnapshot[] }
 	| { cancelled: boolean }
-	| {
-			text: string;
-			details?: unknown;
-			images?: Omit<ImageContent, "type">[];
-			hasError?: boolean;
-	  };
+	| BridgedToolValue;
+
 function toolResultHasError(result: AgentToolResult): boolean {
 	if (isRecord(result) && result.isError === true) return true;
 	return isRecord(result.details) && result.details.isError === true;
+}
+
+/** Tools whose `details` already drew an outputSchema drift warning; one warning per tool per process. */
+const outputSchemaDriftWarned = new Set<string>();
+
+/** The `outputSchema` of the tool the bridge would dispatch `name` to, if it declares one. */
+export function evalBridgeOutputSchema(session: ToolSession, name: string): TSchema | undefined {
+	const tool = session.getToolForEvalBridge ? session.getToolForEvalBridge(name) : session.getToolByName?.(name);
+	return tool?.outputSchema;
 }
 
 function getTool(session: ToolSession, name: string): AgentTool {
@@ -146,12 +166,18 @@ function summarizePreludeResult(session: ToolSession): StatusSummarizer {
 	};
 }
 
+/**
+ * Converts a session tool result into the value eval code receives. A failed
+ * result throws {@link ToolCallError}; a tool with an `outputSchema` always
+ * yields `{ text, details }`; otherwise plain text when there is nothing else.
+ */
 export function bridgeValueFromToolResult(
 	name: string,
 	args: unknown,
 	result: AgentToolResult,
 	emitStatus?: (event: JsStatusEvent) => void,
 	summarize: StatusSummarizer = summarizeToolResult,
+	outputSchema?: TSchema,
 ): ToolValue {
 	const textBlocks = result.content.filter(
 		(content): content is { type: "text"; text: string } =>
@@ -167,13 +193,23 @@ export function bridgeValueFromToolResult(
 		const event = summarize(name, args, result, text, hasError);
 		if (event) emitStatus(event);
 	}
-	if (result.details === undefined && imageBlocks.length === 0 && !hasError) return text;
-	const value: Exclude<ToolValue, string> = { text, details: result.details };
-	if (imageBlocks.length > 0) {
-		value.images = imageBlocks.map(({ type: _type, ...image }) => image);
+	if (hasError) throw new ToolCallError(name, text || `tool "${name}" failed`, text, result.details);
+	const images = imageBlocks.length > 0 ? imageBlocks.map(({ type: _type, ...image }) => image) : undefined;
+	if (outputSchema !== undefined && !outputSchemaDriftWarned.has(name)) {
+		// Documents and validates, never filters: drift is logged, the details pass through untouched.
+		// Validate the JSON form, where an `undefined`-valued key means absent, as eval code sees it.
+		const json = JSON.stringify(result.details);
+		const validation = validateJsonSchemaValue(
+			outputJsonSchema(outputSchema),
+			json === undefined ? undefined : JSON.parse(json),
+		);
+		if (!validation.success) {
+			outputSchemaDriftWarned.add(name);
+			logger.warn("Tool details do not match its outputSchema", { tool: name, issues: validation.issues });
+		}
 	}
-	if (hasError) value.hasError = true;
-	return value;
+	if (outputSchema === undefined && result.details === undefined && !images) return text;
+	return images ? { text, details: result.details, images } : { text, details: result.details };
 }
 
 function waitForSpeculativeClaim<T>(claim: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -199,6 +235,7 @@ function waitForSpeculativeClaim<T>(claim: Promise<T>, signal?: AbortSignal): Pr
 }
 
 export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
+	options.scheduler?.recordAttempt();
 	if (name === "__prelude__") {
 		const request = parsePreludeRequest(args);
 		const toolCallId = `prelude-${request.name}-${crypto.randomUUID()}`;
@@ -223,10 +260,13 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 				summarizePreludeResult(options.session),
 			);
 		} catch (error) {
-			options.emitStatus?.({
-				op: request.name,
-				error: error instanceof Error ? error.message : String(error),
-			});
+			// A failed result already recorded its status while being converted.
+			if (!(error instanceof ToolCallError)) {
+				options.emitStatus?.({
+					op: request.name,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 			throw error;
 		}
 	}
@@ -293,8 +333,22 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 			options.signal,
 		);
 		options.signal?.throwIfAborted();
-		if (claimed) return bridgeValueFromToolResult(name, validatedArgs, claimed, options.emitStatus);
+		if (claimed) {
+			return bridgeValueFromToolResult(
+				name,
+				validatedArgs,
+				claimed,
+				options.emitStatus,
+				undefined,
+				tool.outputSchema,
+			);
+		}
 	}
+	const release = await options.scheduler?.acquire(
+		// Validated against the tool's object parameter schema above.
+		resolveToolConcurrencyMode(tool.concurrency, validatedArgs as Record<string, unknown>),
+		options.signal,
+	);
 	try {
 		const result = await tool.execute(
 			toolCallId,
@@ -310,12 +364,17 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 			const phases = committedTodoPhases(result);
 			if (phases) options.session.persistTodoPhases?.(phases);
 		}
-		return bridgeValueFromToolResult(name, validatedArgs, result, options.emitStatus);
+		return bridgeValueFromToolResult(name, validatedArgs, result, options.emitStatus, undefined, tool.outputSchema);
 	} catch (error) {
-		options.emitStatus?.({
-			op: name,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		// A failed result already recorded its status while being converted.
+		if (!(error instanceof ToolCallError)) {
+			options.emitStatus?.({
+				op: name,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 		throw error;
+	} finally {
+		release?.();
 	}
 }

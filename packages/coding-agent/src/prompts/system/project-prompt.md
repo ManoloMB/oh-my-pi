@@ -18,7 +18,7 @@ MUST follow these context files for all tasks:
 {{#if agentsMdSearch.files.length}}
 <dir-context>
 Some directories may have rules; deeper rules override higher ones.
-Before changes in these directories, MUST read:
+{{#if dirContextAutoInject}}Their rules are injected automatically the first time you read or edit inside them; before creating a NEW file in one you have not read from, read its AGENTS.md first:{{else}}Before changes in these directories, MUST read:{{/if}}
 {{#list agentsMdSearch.files join="\n"}}- {{this}}{{/list}}
 </dir-context>
 {{/if}}

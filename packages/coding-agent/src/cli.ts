@@ -37,6 +37,7 @@ import {
 	LSP_MUX_WORKER_ARG,
 	PARENT_WATCHDOG_WORKER_ARG,
 	STATS_ACTIVITY_WORKER_ARG,
+	SESSION_SEARCH_WORKER_ARG,
 	TERMINAL_OUTPUT_WORKER_ARG,
 	TEXT_PREDICT_WORKER_ARG,
 } from "./cli/worker-selectors";
@@ -149,6 +150,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestBlobBroker } = await import("./blob-broker/daemon");
 	const { smokeTestTerminalOutputWorker } = await import("./launch/terminal-output-worker-client");
 	const { smokeTestTextPredictDaemon } = await import("./predict/client");
+	const { smokeTestSessionSearchWorker } = await import("./session/session-search/client");
 	await smokeTestSyncWorker();
 	await smokeTestStatsActivityWorker();
 
@@ -177,6 +179,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestBlobBroker();
 	await smokeTestTerminalOutputWorker();
 	await smokeTestTextPredictDaemon();
+	await smokeTestSessionSearchWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -281,6 +284,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		if (parentPort) installWorkerInbox(parentPort);
 		// This selector is the isolation boundary; a static import would evaluate xterm in normal CLI startup.
 		await import("./launch/terminal-output-worker");
+		return true;
+	}
+	if (arg === SESSION_SEARCH_WORKER_ARG) {
+		const parentPort = getWorkerParentPort();
+		if (parentPort) installWorkerInbox(parentPort);
+		await import("./session/session-search/worker-entry");
 		return true;
 	}
 	if (arg === PARENT_WATCHDOG_WORKER_ARG) {

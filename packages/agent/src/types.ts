@@ -250,6 +250,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/** Remembers sent tool definitions to fill {@link Context.inactiveTools}. */
 	sentToolDefinitions?: SentToolDefinitions;
 
+	/** Wire definitions substituted by tool name after `transformProviderContext` (forked children). */
+	pinnedToolDefinitions?: ReadonlyMap<string, Tool>;
+
 	/**
 	 * Resolves the API key or resolver for the current model before each LLM call.
 	 *
@@ -1135,6 +1138,8 @@ export interface AgentTool<
 	loadMode?: ToolLoadMode;
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
+	/** Shape of `details` on success for eval-bridged calls; documents and validates, never filters. */
+	outputSchema?: TSchema;
 	/**
 	 * On-demand documentation topics (`topic → markdown`), readable as
 	 * `xd://<tool>/<topic>`. Lets a tool keep large sub-surfaces out of its

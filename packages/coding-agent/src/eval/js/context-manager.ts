@@ -8,9 +8,10 @@ import {
 } from "../../subprocess/worker-client";
 import type { ToolSession } from "../../tools";
 import { ToolAbortError } from "../../tools/tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolCallError, ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
+import type { EvalCallScheduler } from "../call-scheduler";
 import { getEnabledEvalPreludes } from "../preludes";
 import { attachSessionOwner, EvalKernelNotRunningError, type SessionOwners } from "../executor-base";
 import { shouldDetachKernel } from "../py/spawn-options";
@@ -64,6 +65,8 @@ interface PendingRun {
 	runState: VmRunState;
 	toolSession: ToolSession;
 	shadowCell?: EvalShadowCellSession;
+	/** Per-cell scheduler for the run's session tool calls. */
+	scheduler?: EvalCallScheduler;
 	resolve(value: { value: unknown }): void;
 	reject(error: Error): void;
 	toolCalls: Map<string, AbortController>;
@@ -160,6 +163,7 @@ export async function executeInVmContext(options: {
 	code: string;
 	filename: string;
 	timeoutMs?: number;
+	callScheduler?: EvalCallScheduler;
 	runState: VmRunState;
 }): Promise<{ value: unknown }> {
 	const { sessionKey } = options;
@@ -502,6 +506,7 @@ async function runOnce(
 		code: string;
 		filename: string;
 		runState: VmRunState;
+		callScheduler?: EvalCallScheduler;
 		expectedRevision?: number;
 		expectedDigest?: string;
 	},
@@ -513,6 +518,7 @@ async function runOnce(
 		runState: options.runState,
 		toolSession: options.session,
 		shadowCell: getActiveEvalShadowCell(),
+		scheduler: options.callScheduler,
 		resolve,
 		reject,
 		toolCalls: new Map(),
@@ -821,6 +827,7 @@ async function handleToolCall(session: JsSession, msg: Extract<WorkerOutbound, {
 			signal: ctrl.signal,
 			identity: msg.identity,
 			shadowCell: pending.shadowCell,
+			scheduler: pending.scheduler,
 			emitStatus: (event: JsStatusEvent) => {
 				trackDeferPhase(pending, event);
 				pending.runState.onDisplay?.({ type: "status", event });
@@ -941,6 +948,18 @@ function errorFromPayload(payload: RunErrorPayload): Error {
 }
 
 function toErrorPayload(error: unknown): RunErrorPayload {
+	if (error instanceof ToolCallError) {
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+			isToolError: true,
+			isToolCallError: true,
+			toolName: error.toolName,
+			text: error.text,
+			details: error.details,
+		};
+	}
 	if (error instanceof Error) {
 		return {
 			name: error.name,

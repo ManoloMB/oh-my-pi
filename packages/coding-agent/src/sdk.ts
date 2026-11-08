@@ -23,6 +23,7 @@ import type {
 	ServiceTier,
 	ServiceTierByFamily,
 	SimpleStreamOptions,
+	Tool as WireTool,
 } from "@oh-my-pi/pi-ai";
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
@@ -311,9 +312,12 @@ import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { shutdownTinyTitleClient } from "./tiny/title-client";
 import { buildWorkspaceTree, collectAgentsMdIndex, type WorkspaceTree } from "./workspace-tree";
 import { resolveWorkspaceSnapshot, type WorkspaceSnapshot } from "./utils/workspace-snapshot";
+import { SessionSearchIndexClient } from "./session/session-search/client";
 
 import {
+	cfgArchiveContentSearch,
 	cfgArchiveEnabled,
+	cfgArchiveIndexThinking,
 	cfgAsyncMaxJobs,
 	cfgComputerEnabled,
 	cfgRatchetEnabled,
@@ -390,6 +394,7 @@ import {
 import { cfgPlanEnabled } from "./plan-mode/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import {
+	cfgContextFilesNestedAutoInject,
 	cfgSnapcompactShape,
 	cfgSnapcompactSystemPrompt,
 	cfgSnapcompactToolResults,
@@ -659,6 +664,8 @@ export interface CreateAgentSessionOptions {
 	providerPromptCacheKey?: string;
 	/** Whether `providerPromptCacheKey` is caller-pinned or inherited from a full fork. */
 	providerPromptCacheKeySource?: "explicit" | "fork";
+	/** Parent wire tool definitions a forked child declares in place of its own renders (prompt-cache reuse). */
+	pinnedToolDefinitions?: readonly WireTool[];
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
 	deadline?: number;
 
@@ -2382,6 +2389,24 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
 			getActiveModel: () => agent?.state.model ?? model,
+			getTaskForkSource: async () => {
+				const forkAgent = agent;
+				const forkSession = session;
+				const sessionFile = sessionManager.getSessionFile();
+				const activeModel = forkAgent?.state.model;
+				if (!forkAgent || !forkSession || !sessionFile || !activeModel) return undefined;
+				await sessionManager.ensureOnDisk();
+				await sessionManager.flush();
+				return {
+					sessionFile,
+					systemPrompt: [...forkAgent.state.systemPrompt],
+					model: activeModel,
+					thinkingLevel: forkSession.configuredThinkingLevel(),
+					toolDefinitions: forkAgent.getSentToolDefinitions(),
+					// Providers route on `promptCacheKey ?? sessionId`; mirror what the parent cached under.
+					promptCacheKey: forkAgent.promptCacheKey ?? forkSession.sessionId,
+				};
+			},
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],
 			getPlanModeState: () => session?.getPlanModeState(),
@@ -4001,6 +4026,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				secretsEnabled: obfuscator?.obfuscates() === true,
 				workspaceTree: workspaceTreePromise ?? agentsMdIndexPromise ?? emptyWorkspaceTree,
 				includeWorkspaceTree,
+				dirContextAutoInject: cfgContextFilesNestedAutoInject.get(settings),
 				codingGuidance,
 				workspaceSnapshot,
 				memoryBackend: memoryBackend?.id,
@@ -4404,6 +4430,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			deadline: options.deadline,
 			transformContext,
 			transformProviderContext,
+			pinnedToolDefinitions: options.pinnedToolDefinitions,
 			steeringMode: cfgSteeringMode.get(settings),
 			followUpMode: cfgFollowUpMode.get(settings),
 			interruptMode: cfgInterruptMode.get(settings),
@@ -4734,6 +4761,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
+		if (!isSubagentSession && cfgArchiveEnabled.get(settings) && cfgArchiveContentSearch.get(settings)) {
+			// Warm the session content index off the main thread once startup settles.
+			setTimeout(() => {
+				SessionSearchIndexClient.global()
+					.reconcile({ scopeCwd: cwd, budgetMs: 3000, indexThinking: cfgArchiveIndexThinking.get(settings) })
+					.catch(error => logger.debug("Session search warm-up failed", { error: String(error) }));
+			}, 15_000).unref();
+		}
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics

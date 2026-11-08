@@ -249,7 +249,8 @@ describe("buildToolNamespacesInfo", () => {
 		expect(Object.keys(info.functions.functions)).toEqual(["apply_patch"]);
 
 		const declarations = generateCodeModeDeclarations([{ name: "apply_patch", parameters: undefined }]);
-		expect(declarations).toContain("apply_patch(args: unknown): Promise<unknown>;");
+		expect(declarations).toContain("  apply_patch: unknown;");
+		expect(declarations).toContain("  apply_patch: string | { text: string; details?: unknown };");
 	});
 
 	test("prototype-named tools land as own entries", () => {

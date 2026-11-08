@@ -12,6 +12,7 @@ import { $env } from "@oh-my-pi/pi-utils";
 
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { Model, Tool } from "@oh-my-pi/pi-ai";
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
 	if (value) {
@@ -38,6 +39,17 @@ export const TASK_SUBAGENT_EVENT_CHANNEL = "task:subagent:event";
 export interface SubagentEventPayload {
 	id: string;
 	event: AgentSessionEvent;
+}
+
+/** Parent snapshot a `task` fork child inherits: transcript file, prompt bytes, model and cache identity. */
+export interface TaskForkSource {
+	sessionFile: string;
+	systemPrompt: string[];
+	model: Model;
+	thinkingLevel: ConfiguredThinkingLevel | undefined;
+	/** Parent wire tool definitions (post-transform), pinned in the child for byte-identical `tools`. */
+	toolDefinitions: Tool[];
+	promptCacheKey: string;
 }
 
 // Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
@@ -122,10 +134,13 @@ function createTaskSchema(options: {
 	defaultAgent: string;
 	effortEnabled: boolean;
 	evalToolsEnabled: boolean;
+	forkEnabled: boolean;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
 	const effortField = options.effortEnabled ? { "effort?": effortRule } : {};
 	const toolsField = options.evalToolsEnabled ? { "tools?": "string[]" } : {};
+	// Top-level only: a batch shares one parent snapshot, so `fork` is never per item.
+	const forkField = options.forkEnabled ? { "fork?": "boolean" } : {};
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {
 			const item = type.raw({
@@ -143,6 +158,7 @@ function createTaskSchema(options: {
 			return type.raw({
 				context: "string",
 				tasks: item.array(),
+				...forkField,
 				"+": "delete",
 			});
 		}
@@ -160,6 +176,7 @@ function createTaskSchema(options: {
 		return type.raw({
 			context: "string",
 			tasks: item.array(),
+			...forkField,
 			"+": "delete",
 		});
 	}
@@ -174,6 +191,7 @@ function createTaskSchema(options: {
 			"schemaMode?": '"permissive" | "strict"',
 			...toolsField,
 			"isolated?": "boolean",
+			...forkField,
 			"+": "delete",
 		});
 	}
@@ -186,6 +204,7 @@ function createTaskSchema(options: {
 		"outputSchema?": outputSchemaInputSchema,
 		"schemaMode?": '"permissive" | "strict"',
 		...toolsField,
+		...forkField,
 		"+": "delete",
 	});
 }
@@ -197,19 +216,22 @@ export function getTaskSchema(options: {
 	effortEnabled?: boolean;
 	/** Advertise the `tools` field for eval-defined tools (`eval.tools.enabled`, default on). */
 	evalToolsEnabled?: boolean;
+	/** Advertise the top-level `fork` field (`task.fork.enabled`). */
+	forkEnabled?: boolean;
 	defaultAgent?: string;
 }): TaskToolSchemaInstance {
 	const defaultAgent = options.defaultAgent ?? "task";
 	const effortEnabled = options.effortEnabled ?? false;
 	const evalToolsEnabled = options.evalToolsEnabled ?? true;
-	if (defaultAgent === "task" && !effortEnabled && evalToolsEnabled) {
+	const forkEnabled = options.forkEnabled ?? false;
+	if (defaultAgent === "task" && !effortEnabled && evalToolsEnabled && !forkEnabled) {
 		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
 		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
-	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${evalToolsEnabled ? "tools" : "notools"}:${defaultAgent}`;
+	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${evalToolsEnabled ? "tools" : "notools"}:${forkEnabled ? "fork" : "nofork"}:${defaultAgent}`;
 	const cached = taskSchemaCache.get(key);
 	if (cached) return cached;
-	const schema = createTaskSchema({ ...options, effortEnabled, evalToolsEnabled, defaultAgent });
+	const schema = createTaskSchema({ ...options, effortEnabled, evalToolsEnabled, forkEnabled, defaultAgent });
 	taskSchemaCache.set(key, schema);
 	return schema;
 }

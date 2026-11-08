@@ -40,6 +40,14 @@ def _make_archive():
         async def recaps(self, *, project=None, limit=None, silent=False):
             return await _call("recaps", {"project": project, "limit": limit}, silent)
 
+        async def find(self, query, *, project=None, limit=None, silent=False):
+            return await _call("find", {"query": query, "project": project, "limit": limit}, silent)
+
+        async def open(self, id, *, line=None, before=None, after=None, silent=False):
+            return await _call(
+                "open", {"id": id, "line": line, "before": before, "after": after}, silent
+            )
+
     return _Archive()
 
 

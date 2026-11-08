@@ -218,6 +218,17 @@ export function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+export const BASH_HINT_PREFIX = "[Hint: ";
+
+/** Formats the model-facing recovery hint appended after a bash result. */
+export function formatBashHintNotice(hint: string): string {
+	return `${BASH_HINT_PREFIX}${hint}]`;
+}
+
+export function isBashHintNotice(line: string): boolean {
+	return line.startsWith(BASH_HINT_PREFIX) && line.endsWith("]");
+}
+
 /** Shell arguments used to build a command preview. */
 export interface BashRenderArgs {
 	command?: string;
@@ -313,10 +324,12 @@ function stripBashNotices(
 			? stripTrailingNotice(rawOutput, line => isBackgroundNotice(line, job.jobId))
 			: rawOutput;
 	const strippedOutput = stripOutputNotice(withoutBackground, details?.meta);
+	// The hint is the last model-facing line; strip it before the exit/wall/artifact notices it follows.
+	const withoutHint = stripTrailingNotice(strippedOutput, isBashHintNotice);
 	const withoutExit =
 		details?.exitCode === undefined
-			? strippedOutput
-			: stripTrailingNotice(strippedOutput, formatExitCodeNotice(details.exitCode));
+			? withoutHint
+			: stripTrailingNotice(withoutHint, formatExitCodeNotice(details.exitCode));
 	const withoutWall =
 		details?.wallTimeMs === undefined
 			? withoutExit

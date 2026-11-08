@@ -11,6 +11,8 @@ The `archive` object exists in JavaScript and Python Eval; it is not a standalon
 - `session(id, {limit})` → one session plus `recaps` (all, oldest first) and `prompts` (newest `limit`, oldest first). `id`: any unique id prefix (listings show 13 characters) or the session `.jsonl` path.
 - `prompts({project, limit})` → `[{text, at, project, session, uses}]`, newest first. `search(query, {project, limit})` keeps prompts containing every query word (case-insensitive substring).
 - `recaps({project, limit})` → `[{text, at, session, project}]`, newest first.
+- `find(query, {project?, limit?})` → `[{session, project, title, at, type, snippet, line, file, more}]`, best first; `limit` 1–25, default 8. `open(id, {line?, before?, after?})` → transcript window around JSONL `line` (default: session end; `before` 8, `after` 16).
+- `find` searches the verbatim CONTENT of past sessions (assistant text, tool calls and results, summaries) — not just typed prompts. Reach for it before re-deriving something you likely solved before (an error message, a command, a design decision). One row per session; widen with `open`. Distinct from memory recall, which is summarized.
 - Python: same names, keyword options: `await archive.sessions(project="*", limit=50)`.
 - Prompt history holds prompts typed into the interactive editor, one row per unique prompt tagged with its latest submission's project and session; subagent tasks and SDK/RPC prompts are absent.
 - Recaps are short summaries written when an interactive session goes idle; many sessions have none.

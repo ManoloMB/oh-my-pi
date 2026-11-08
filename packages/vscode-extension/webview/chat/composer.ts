@@ -352,7 +352,8 @@ export class Composer {
 		setTooltip(this.#planToggle, title);
 		this.#planToggle.ariaLabel = title;
 		this.#input.placeholder = this.#placeholder();
-		this.#planToggle.ariaPressed = String(this.#planOn || tracking);
+		// Tracking an approved plan is not plan mode: the button only opens its progress.
+		this.#planToggle.ariaPressed = String(this.#planOn);
 		this.#planToggle.ariaHasPopup = tracking ? "dialog" : null;
 		this.#planToggle.classList.toggle("executing", tracking);
 	}

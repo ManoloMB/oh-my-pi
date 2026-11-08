@@ -7,7 +7,7 @@
 
 # Delegation
 Use most specific agent.{{#if scoutAvailable}} Read-only research over unknown files → `scout`; known files → read them yourself.{{/if}} Prefer one agent to investigate + edit. Omit `agent` only for default (`{{defaultAgent}}`); NEVER specify it.
-Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate via `write agent://<id>`{{/if}}. Set interfaces in {{#if batchEnabled}}`context`{{else}}the task{{/if}}. Every task MUST skip build/lint/tests/formatters mid-flight; run once afterward.
+Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate via `write agent://<id>`{{/if}}.{{#if teamEnabled}} The shared board tool `team_task` tracks claims and dependencies across this tree — use it for work other agents must pick up or wait on.{{/if}} Set interfaces in {{#if batchEnabled}}`context`{{else}}the task{{/if}}. Every task MUST skip build/lint/tests/formatters mid-flight; run once afterward.
 
 # Inputs
 `name`: CamelCase ≤32, auto-generated if omitted; address agent by name. `outputSchema` overrides agent/session schemas.
@@ -17,7 +17,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 {{/if}}`schemaMode`: default permissive warns after retries; strict fails.
 {{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
 {{else}}`isolated`: worktree; changes retained, not applied.
-{{/if}}{{/if}}Children start blank;{{#if ircEnabled}} parent IRC steers immediately;{{/if}} large payloads via `local://<path>`, NEVER inline.
+{{/if}}{{/if}}{{#if forkEnabled}}`fork`: children inherit this conversation and its prompt cache; `task` names only the new assignment, no handoff. Use for review, verification, or continuing work already in context; NEVER for unrelated work or near a full context window.
+{{/if}}Children start blank{{#if forkEnabled}} unless `fork`{{/if}};{{#if ircEnabled}} parent IRC steers immediately;{{/if}} large payloads via `local://<path>`, NEVER inline.
 
 # Format
 {{#if batchEnabled}}`context`: shared (`# Goal`, `# Contract` interfaces); NEVER repeat per task.

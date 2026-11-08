@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { EvalCallScheduler } from "@oh-my-pi/pi-coding-agent/eval/call-scheduler";
 import { callSessionTool } from "@oh-my-pi/pi-coding-agent/eval/js/tool-bridge";
 import type { EvalShadowCellSession } from "@oh-my-pi/pi-coding-agent/eval/speculation/cell-session";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { ToolCallError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
@@ -139,7 +141,8 @@ describe("callSessionTool", () => {
 			{ session },
 		);
 
-		expect(result).not.toEqual(expect.objectContaining({ hasError: true }));
+		// A failed call throws ToolCallError; resolving with the typed `{ text, details }` shape means success.
+		expect(result).toMatchObject({ details: { storage: expect.any(String) } });
 		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["completed"]);
 	});
 
@@ -696,7 +699,7 @@ describe("callSessionTool", () => {
 			{ session },
 		);
 
-		expect(result).not.toEqual(expect.objectContaining({ hasError: true }));
+		expect(result).toMatchObject({ details: { storage: expect.any(String) } });
 		expect(phases).toEqual([
 			{ name: "Recovered", tasks: [{ content: "From malformed JSON", status: "in_progress" }] },
 		]);
@@ -721,7 +724,9 @@ describe("callSessionTool", () => {
 
 		// Reads and rejected batches leave the branch untouched.
 		await callSessionTool("todo", { op: "view" }, { session });
-		await callSessionTool("todo", { op: "done", task: "No such task" }, { session });
+		await expect(callSessionTool("todo", { op: "done", task: "No such task" }, { session })).rejects.toBeInstanceOf(
+			ToolCallError,
+		);
 		expect(persisted).toHaveLength(1);
 	});
 
@@ -778,7 +783,7 @@ describe("callSessionTool", () => {
 		});
 	});
 
-	it("marks structured results when the underlying tool reports an error", async () => {
+	it("rejects with ToolCallError when the underlying tool reports an error in details", async () => {
 		const session = createSession([
 			createTool("mcp__demo_fail", async () => ({
 				content: [{ type: "text", text: "Error: bad input" }],
@@ -787,16 +792,18 @@ describe("callSessionTool", () => {
 		]);
 		const statuses: Array<Record<string, unknown>> = [];
 
-		const result = await callSessionTool(
+		const error = await callSessionTool(
 			"mcp__demo_fail",
 			{},
 			{ session, emitStatus: event => statuses.push(event) },
-		);
+		).catch((err: unknown) => err);
 
-		expect(result).toEqual({
+		expect(error).toBeInstanceOf(ToolCallError);
+		expect(error).toMatchObject({
+			toolName: "mcp__demo_fail",
+			message: "Error: bad input",
 			text: "Error: bad input",
 			details: { serverName: "demo", mcpToolName: "fail", isError: true },
-			hasError: true,
 		});
 		expect(statuses).toEqual([
 			expect.objectContaining({
@@ -808,34 +815,96 @@ describe("callSessionTool", () => {
 		]);
 	});
 
-	it("marks results with top-level isError", async () => {
+	it("rejects with ToolCallError on a top-level isError result", async () => {
 		const session = createSession([
 			createTool(
-				"custom",
+				"bash",
 				async () =>
 					({
-						content: [{ type: "text", text: "preview mismatch" }],
+						content: [{ type: "text", text: "boom" }],
 						isError: true,
 					}) as AgentToolResult,
 			),
 		]);
 		const statuses: Array<Record<string, unknown>> = [];
 
-		const result = await callSessionTool("custom", {}, { session, emitStatus: event => statuses.push(event) });
+		const error = await callSessionTool(
+			"bash",
+			{ command: "false" },
+			{ session, emitStatus: event => statuses.push(event) },
+		).catch((err: unknown) => err);
 
-		expect(result).toEqual({
-			text: "preview mismatch",
-			details: undefined,
-			hasError: true,
-		});
-		expect(statuses).toEqual([
-			expect.objectContaining({
-				op: "custom",
-				chars: 16,
-				hasError: true,
-				error: "preview mismatch",
-			}),
+		expect(error).toBeInstanceOf(ToolCallError);
+		expect((error as ToolCallError).toolName).toBe("bash");
+		expect((error as ToolCallError).text).toBe("boom");
+		// The failure is recorded once, by the result summary, not again by the rethrow.
+		expect(statuses).toHaveLength(1);
+	});
+
+	it("resolves { text, details } for a tool that declares an outputSchema", async () => {
+		const tool = {
+			...createTool("glob", async () => ({
+				content: [{ type: "text", text: "a\nb\nc" }],
+				details: { fileCount: 3 },
+			})),
+			outputSchema: type({ "fileCount?": "number" }),
+		} as AgentTool;
+		const result = await callSessionTool("glob", {}, { session: createSession([tool]) });
+		expect(result).toEqual({ text: "a\nb\nc", details: { fileCount: 3 } });
+	});
+
+	it("resolves { text, details } with an outputSchema even when details are absent", async () => {
+		const tool = {
+			...createTool("glob", async () => ({ content: [{ type: "text", text: "none" }] })),
+			outputSchema: type({ "fileCount?": "number" }),
+		} as AgentTool;
+		const result = await callSessionTool("glob", {}, { session: createSession([tool]) });
+		expect(result).toEqual({ text: "none", details: undefined });
+	});
+
+	it("keeps the legacy shape for tools without an outputSchema", async () => {
+		const session = createSession([
+			createTool("plain", async () => ({ content: [{ type: "text", text: "just text" }] })),
+			createTool("detailed", async () => ({ content: [{ type: "text", text: "t" }], details: { x: 1 } })),
 		]);
+		expect(await callSessionTool("plain", {}, { session })).toBe("just text");
+		expect(await callSessionTool("detailed", {}, { session })).toEqual({ text: "t", details: { x: 1 } });
+	});
+
+	it("serializes an exclusive call behind an in-flight shared one", async () => {
+		const spans: Record<string, { start: number; end: number }> = {};
+		const timed = (name: string, concurrency: "shared" | "exclusive"): AgentTool =>
+			({
+				...createTool(name, async () => {
+					const start = Bun.nanoseconds();
+					// Yield a few turns so overlap would be observable without the scheduler.
+					for (let i = 0; i < 20; i++) await Promise.resolve();
+					spans[name] = { start, end: Bun.nanoseconds() };
+					return { content: [{ type: "text", text: name }] };
+				}),
+				concurrency,
+			}) as AgentTool;
+		const session = createSession([timed("reader", "shared"), timed("writer", "exclusive")]);
+		const scheduler = new EvalCallScheduler({ maxParallel: 1, maxCalls: Infinity, callsPerMinute: 1024 });
+
+		await Promise.all([
+			callSessionTool("reader", {}, { session, scheduler }),
+			callSessionTool("writer", {}, { session, scheduler }),
+		]);
+
+		expect(spans.writer!.start).toBeGreaterThanOrEqual(spans.reader!.end);
+	});
+
+	it("rejects the call that exceeds the scheduler's allowance without dispatching it", async () => {
+		const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+		const session = createSession([createTool("read", execute)]);
+		const scheduler = new EvalCallScheduler({ maxParallel: 10, maxCalls: 1, callsPerMinute: 2 });
+
+		expect(await callSessionTool("read", {}, { session, scheduler })).toBe("ok");
+		await expect(callSessionTool("read", {}, { session, scheduler })).rejects.toThrow(
+			/exceeded its limit of 1 tool calls/,
+		);
+		expect(execute).toHaveBeenCalledTimes(1);
 	});
 
 	it("throws when the requested tool is not available in the session registry", async () => {

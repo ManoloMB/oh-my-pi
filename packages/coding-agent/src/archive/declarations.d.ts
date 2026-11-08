@@ -61,6 +61,41 @@ interface ArchiveSessionDetail extends ArchiveSession {
 	prompts: ArchivePrompt[];
 }
 
+/** Options for `archive.find`. */
+interface ArchiveFindOptions {
+	/** Maximum sessions (1–25). Default 8. */
+	limit?: number;
+	/** Project directory or `"*"` for every project. Default: current project. */
+	project?: string;
+	silent?: boolean;
+}
+
+/** Options for `archive.open`. */
+interface ArchiveOpenOptions {
+	/** 1-based JSONL line to center on (from a `find` hit). Default: the session's end. */
+	line?: number;
+	/** Lines before `line` (0–200). Default 8. */
+	before?: number;
+	/** Lines after `line` (0–200). Default 16. */
+	after?: number;
+	silent?: boolean;
+}
+
+/** One session matching a content search, with its best-scoring entry. */
+interface ArchiveFindHit {
+	session: string;
+	project: string;
+	title: string;
+	at: string;
+	type: "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "summary" | "custom";
+	snippet: string;
+	/** 1-based JSONL line of the best match; pass to `archive.open`. */
+	line: number;
+	file: string;
+	/** Further matching entries in the same session. */
+	more: number;
+}
+
 /** Read-only view of local history in JavaScript Eval. Each call prints a formatted listing and returns its records. */
 declare const archive: {
 	/** Recent projects by last activity, each with its newest session and recap. */
@@ -75,4 +110,8 @@ declare const archive: {
 	search(query: string, options?: ArchiveScopedOptions): Promise<ArchivePrompt[]>;
 	/** Journaled idle recaps, newest first. */
 	recaps(options?: ArchiveScopedOptions): Promise<ArchiveRecap[]>;
+	/** Verbatim content search over past sessions (assistant text, tool calls/results, summaries); one row per session. */
+	find(query: string, options?: ArchiveFindOptions): Promise<ArchiveFindHit[]>;
+	/** A transcript window of one session around `line`. */
+	open(id: string, options?: ArchiveOpenOptions): Promise<{ file: string; from: number; to: number; total: number }>;
 };

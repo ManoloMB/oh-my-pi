@@ -18,5 +18,7 @@
 		prompts: options => call("prompts", "prompts", options),
 		search: (query, options) => call("search", "prompts", options, { query }),
 		recaps: options => call("recaps", "recaps", options),
+		find: (query, options) => call("find", "find", options, { query }),
+		open: (id, options) => call("open", "open", options, { id }),
 	});
 }

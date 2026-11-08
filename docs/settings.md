@@ -625,6 +625,8 @@ Mounting still follows the session's explicit tool allow-list. A session that pe
 
 Individual built-in tools and Eval preludes are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `ratchet.enabled` (default `false`; the `ratchet(flow)` eval/hillclimb prelude, which `/ratchet` turns on for the current session only), `archive.enabled` (default `true`; the read-only `archive` eval prelude over prompt history, recent projects, past sessions, and recaps), `astEdit.enabled`, `astGrep.enabled`, `find.enabled` (`auto`/`on`/`off`; `auto` enables `find` only when the `judge` role resolves to a native TypeSafe jev model), and `web_search.enabled`. Image questions use `read <image>?q=<question>` and honor `images.questionTimeoutMs`.
 
+`archive.contentSearch` (default `true`) indexes past top-level session content into `session-search.db` for `archive.find`/`archive.open` (and the `session_search` tool when `eval` is unavailable); `archive.indexThinking` (default `false`) also indexes assistant thinking. `task.team.enabled` (default `true`) exposes the shared `team_task` board to agents that can coordinate with peers; `task.team.maxTasks` (default `256`) caps non-deleted tasks per board.
+
 ### Window-scoped computer use
 
 The disabled-by-default `computer` Eval prelude captures and controls real host windows through native OS APIs. Window handles isolate an application without focusing it or moving the real pointer; the `desktop` object preserves selected-display composite and global input behavior. It remains separate from the `browser` Eval prelude, which manages Chromium/CDP tabs and structured page automation.

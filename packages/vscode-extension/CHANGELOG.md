@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.32.0]
+
+### Changed
+
+- Approving a plan turns the plan button off: plan mode is left, and while the plan runs the button only shows its "done/total" progress badge and opens the step list when clicked, so your next prompt is not sent in plan mode
+- Delegate mode now applies to one task: once the task you sent with the subagents button on finishes, the button turns off by itself for your next prompt. Switching it on again while a task runs keeps it on for the next one
+
+### Fixed
+
+- The plan and delegate buttons no longer flip back to an old state when two session refreshes answer out of order
+
 ## [0.31.0]
 
 ### Changed

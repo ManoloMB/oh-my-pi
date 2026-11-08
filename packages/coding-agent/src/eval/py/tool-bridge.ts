@@ -7,10 +7,17 @@
  * current execution and forwards to the same `callSessionTool` implementation
  * the JavaScript bridge uses.
  */
+import { ToolCallError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../../tools";
+import type { EvalCallScheduler } from "../call-scheduler";
 import type { RuntimeCallIdentity } from "../js/shared/runtime";
-import { bridgeValueFromToolResult, callSessionTool, type JsStatusEvent } from "../js/tool-bridge";
+import {
+	bridgeValueFromToolResult,
+	callSessionTool,
+	evalBridgeOutputSchema,
+	type JsStatusEvent,
+} from "../js/tool-bridge";
 import type { EvalShadowCellSession } from "../speculation/cell-session";
 
 export interface PyToolBridgeEntry {
@@ -31,6 +38,8 @@ export interface PyToolBridgeEntry {
 	shadowCell?: EvalShadowCellSession;
 	emitStatus?: (event: JsStatusEvent) => void;
 	abortRequested?: () => boolean;
+	/** Per-cell call scheduler (tool-call allowance and parallelism). */
+	scheduler?: EvalCallScheduler;
 }
 
 export interface PyToolBridgeInfo {
@@ -120,13 +129,24 @@ async function callSessionToolPromptOnAbort(
 		if (claimSignal?.aborted || entry.abortRequested?.()) {
 			throw new Error(`bridge call ${JSON.stringify(name)} aborted: eval cell was interrupted`);
 		}
-		if (claimed) return bridgeValueFromToolResult(name, args, claimed, entry.emitStatus);
+		if (claimed) {
+			entry.scheduler?.recordAttempt();
+			return bridgeValueFromToolResult(
+				name,
+				args,
+				claimed,
+				entry.emitStatus,
+				undefined,
+				evalBridgeOutputSchema(entry.toolSession, name),
+			);
+		}
 	}
 	const call = callSessionTool(name, args, {
 		session: entry.toolSession,
 		signal: entry.signal,
 		emitStatus: entry.emitStatus,
 		identity,
+		scheduler: entry.scheduler,
 	});
 	const signal = entry.shieldedSignal ?? entry.signal;
 	if (!signal) return await call;
@@ -205,6 +225,16 @@ async function startServer(): Promise<BridgeServer> {
 				const value = await callSessionToolPromptOnAbort(name, body.args, entry, identity);
 				return Response.json({ ok: true, value });
 			} catch (err) {
+				if (err instanceof ToolCallError) {
+					return Response.json({
+						ok: false,
+						error: err.message,
+						isToolCallError: true,
+						toolName: err.toolName,
+						text: err.text,
+						details: err.details,
+					});
+				}
 				return Response.json({
 					ok: false,
 					error: err instanceof Error ? err.message : String(err),

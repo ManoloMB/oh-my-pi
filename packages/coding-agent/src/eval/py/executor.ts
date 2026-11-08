@@ -15,6 +15,7 @@ import {
 	isTimedOutCancellation,
 	waitForPromiseWithCancellation,
 } from "../executor-base";
+import type { EvalCallScheduler } from "../call-scheduler";
 import type { JsStatusEvent } from "../js/shared/types";
 import { getEnabledEvalPreludes } from "../preludes";
 import type { EvalToolDescriptor, EvalToolInvokeResult } from "../types";
@@ -123,6 +124,8 @@ export interface PythonExecutorOptions {
 	 * cell finishes.
 	 */
 	onStatus?: (event: JsStatusEvent) => void;
+	/** Per-cell scheduler for session tool calls the kernel makes through the bridge. */
+	callScheduler?: EvalCallScheduler;
 	/** @internal Bridge session id, set by `executePython` before delegating. */
 	bridgeSessionId?: string;
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */

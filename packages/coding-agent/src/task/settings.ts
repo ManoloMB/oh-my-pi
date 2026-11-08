@@ -277,6 +277,45 @@ export const cfgTaskEnableEffort = register({
 	},
 });
 
+export const cfgTaskForkEnabled = register({
+	id: "task.fork.enabled",
+	protocolDefault: ["rpc", "acp"],
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Fork Subagents",
+		description:
+			"Let task spawn children that inherit the conversation and reuse its prompt cache (Anthropic models with mid-conversation tool changes)",
+	},
+});
+
+export const cfgTaskTeamEnabled = register({
+	id: "task.team.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Team Task Board",
+		description:
+			"Expose the team_task board shared by every agent in a task tree: create, claim and complete tasks with dependencies, persisted in the root session",
+	},
+});
+
+export const cfgTaskTeamMaxTasks = register({
+	id: "task.team.maxTasks",
+	type: "number",
+	default: 256,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Team Task Limit",
+		description: "Maximum number of non-deleted tasks on one team task board",
+	},
+});
+
 export const cfgTaskMaxConcurrency = register({
 	id: "task.maxConcurrency",
 	protocolDefault: ["rpc", "acp"],

@@ -1,0 +1,2 @@
+Searches the verbatim CONTENT of past sessions (assistant text, tool calls and results, summaries) — not just typed prompts. Reach for it before re-deriving something you likely solved before (an error message, a command, a design decision).
+`op: "find"` + `query` (`project`: path or `"*"`, default current project; `limit` 1–25, default 8) → one row per session with an `open` hint. `op: "open"` + `id` (+ `line`) → transcript window around that JSONL line. Distinct from memory recall, which is summarized.

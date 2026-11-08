@@ -29,6 +29,7 @@ import {
 	DEFAULT_SHAKE_CONFIG,
 	type CompactionSettings as EngineCompactionSettings,
 	effectiveReserveTokens,
+	estimateAdaptiveReserveTokens,
 	invalidateMessageCache,
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
@@ -117,6 +118,7 @@ import lengthStopRetryTemplate from "../prompts/system/length-stop-retry.md" wit
 
 import {
 	type CompactionSettings,
+	cfgCompactionAdaptiveReserve,
 	cfgCompactionAutoContinue,
 	cfgCompactionEnabled,
 	cfgCompactionMethodOrder,
@@ -575,15 +577,41 @@ export class SessionMaintenance {
 	#incompleteRecoveryAttempts = 0;
 	/** Latest rollover boundary that already received its pre-threshold notebook reminder. */
 	#experimentalNotesReminderBoundaryId: string | undefined;
+	/** Adaptive reserve memoized per branch leaf and context window. */
+	#adaptiveReserve: { leaf: string | null; window: number; value: number | undefined } | undefined;
 	readonly #host: SessionMaintenanceHost;
 
 	get #model(): Model | undefined {
 		return this.#host.model();
 	}
 
-	/** Compaction policy in force for the active model (its `compaction.modelThresholds` entry applied). */
+	/**
+	 * Compaction policy in force for the active model (its `compaction.modelThresholds`
+	 * entry applied), with the reserve sized from observed usage when no explicit
+	 * reserve is configured and `compaction.adaptiveReserve` is on.
+	 */
 	get #compactionSettings(): CompactionSettings {
-		return resolveModelCompactionSettings(this.#host.settings, this.#model);
+		const settings = resolveModelCompactionSettings(this.#host.settings, this.#model);
+		if (settings.reserveTokens !== undefined || !cfgCompactionAdaptiveReserve.get(this.#host.settings)) {
+			return settings;
+		}
+		const window = this.#model?.contextWindow ?? 0;
+		const leaf = this.#host.sessionManager.getLeafId();
+		let cached = this.#adaptiveReserve;
+		if (cached?.leaf !== leaf || cached.window !== window) {
+			cached = {
+				leaf,
+				window,
+				value: estimateAdaptiveReserveTokens(this.#host.sessionManager.getBranch(), window),
+			};
+			this.#adaptiveReserve = cached;
+		}
+		return cached.value === undefined ? settings : { ...settings, adaptiveReserveTokens: cached.value };
+	}
+
+	/** Reserve derived from observed usage, when it currently applies. */
+	adaptiveReserveTokens(): number | undefined {
+		return this.#compactionSettings.adaptiveReserveTokens;
 	}
 
 	get #tokenizer() {

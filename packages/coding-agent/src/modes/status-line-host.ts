@@ -30,7 +30,12 @@ import { cfgGoalStatusInFooter } from "../goals/settings";
  * fixtures) still render; a live `AgentSession` satisfies it structurally.
  */
 export type StatusLineHostSession = StatusLineSession &
-	Partial<Pick<AgentSession, "settings" | "modelRegistry" | "sessionId" | "fetchUsageReports">>;
+	Partial<
+		Pick<
+			AgentSession,
+			"settings" | "modelRegistry" | "sessionId" | "fetchUsageReports" | "compactionAdaptiveReserveTokens"
+		>
+	>;
 
 /** Application policy and runtime services consumed by the portable status renderer. */
 export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
@@ -65,5 +70,10 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
 	classifyResetExpiry,
 	resetExpiryNotice: formatResetExpiryNotice,
 	computeCompactionBoundaries: (session, contextWindow, model) =>
-		getSessionCompactionBoundaries(session.settings ?? settings, contextWindow, model),
+		getSessionCompactionBoundaries(
+			session.settings ?? settings,
+			contextWindow,
+			model,
+			session.compactionAdaptiveReserveTokens?.(),
+		),
 };

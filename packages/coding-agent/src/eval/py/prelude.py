@@ -452,6 +452,15 @@ if "__omp_prelude_loaded__" not in globals():
         finally:
             _OMP_CALL_IDENTITY.reset(token)
 
+    class ToolCallError(RuntimeError):
+        """A session tool called via ``tool.<name>`` reported failure."""
+
+        def __init__(self, tool_name: str, message: str, text: str, details=None):
+            super().__init__(message)
+            self.tool_name = tool_name
+            self.text = text
+            self.details = details
+
     def _bridge_call(name: str, args: dict):
         """POST one request to the host tool bridge and return its `value`."""
         base, token, session = _tool_proxy_from_env()
@@ -493,6 +502,13 @@ if "__omp_prelude_loaded__" not in globals():
             ) from None
         if not isinstance(data, dict) or not data.get("ok"):
             msg = (data or {}).get("error") if isinstance(data, dict) else None
+            if isinstance(data, dict) and data.get("isToolCallError"):
+                raise ToolCallError(
+                    str(data.get("toolName") or name),
+                    msg or f"tool {name!r} failed",
+                    data.get("text") if isinstance(data.get("text"), str) else (msg or ""),
+                    data.get("details"),
+                )
             raise RuntimeError(msg or f"bridge call {name!r} failed")
         return data.get("value")
 

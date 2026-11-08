@@ -59,7 +59,7 @@ const LOCKFILE_MANAGERS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const JS_MANAGERS = ["pnpm", "bun", "yarn", "npm"] as const;
-const VERIFY_TARGETS = ["test", "tests", "lint", "typecheck", "check", "build", "fmt", "format"] as const;
+export const VERIFY_TARGETS = ["test", "tests", "lint", "typecheck", "check", "build", "fmt", "format"] as const;
 const MAX_MARKER_DEPTH = 6;
 const MAX_MANIFESTS = 6;
 const MAX_VERIFY_COMMANDS = 8;

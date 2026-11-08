@@ -1958,6 +1958,11 @@ async function prepareProviderCall(
 			tools: undefined,
 		};
 	}
+	// Pinned definitions are post-transform parent bytes: substitute after the transform, never re-transform.
+	const pinned = config.pinnedToolDefinitions;
+	if (pinned && pinned.size > 0 && llmContext.tools) {
+		llmContext = { ...llmContext, tools: llmContext.tools.map(tool => pinned.get(tool.name) ?? tool) };
+	}
 	// After `transformProviderContext`, so the recorded definitions are exactly what the provider receives.
 	if (config.sentToolDefinitions && llmContext.tools) {
 		config.sentToolDefinitions.record(llmContext.tools);
@@ -3179,6 +3184,25 @@ async function speculativeFinalCalls(
 }
 
 /**
+ * Resolves a tool's scheduling mode for one call. A resolver function sees the
+ * prepared (possibly hook-revised) args; a throwing resolver must not take down
+ * the whole batch, so it falls back to the safe (serial) mode.
+ */
+export function resolveToolConcurrencyMode(
+	concurrencyMode: AgentTool["concurrency"] | undefined,
+	args: Record<string, unknown>,
+): "shared" | "exclusive" {
+	if (typeof concurrencyMode === "function") {
+		try {
+			return concurrencyMode(args);
+		} catch {
+			return "exclusive";
+		}
+	}
+	return concurrencyMode ?? "shared";
+}
+
+/**
  * Execute tool calls from an assistant message. Returns model-visible context
  * only after every result has settled, preserving assistant call order.
  *
@@ -3767,21 +3791,7 @@ async function executeToolCalls(
 			: undefined;
 	for (let index = 0; index < records.length; index++) {
 		const record = records[index];
-		const concurrencyMode = record.tool?.concurrency;
-		let concurrency: "shared" | "exclusive";
-		if (typeof concurrencyMode === "function") {
-			// Resolved from the prepared (possibly hook-revised) args — raw args
-			// only when validation failed, and those records error out before
-			// executing. A throwing resolver must not take down the whole batch,
-			// so fall back to the safe (serial) mode.
-			try {
-				concurrency = concurrencyMode(record.args);
-			} catch {
-				concurrency = "exclusive";
-			}
-		} else {
-			concurrency = concurrencyMode ?? "shared";
-		}
+		const concurrency = resolveToolConcurrencyMode(record.tool?.concurrency, record.args);
 		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
 		const task = start.then(() => runTool(record, index));
 		tasks.push(task);

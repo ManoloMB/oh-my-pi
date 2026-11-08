@@ -39,10 +39,17 @@ import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
+import { isTeamEnabled } from "./team-board";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
-import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
+import {
+	type AgentDefinition,
+	canSpawnAtDepth,
+	getTaskSchema,
+	type TaskForkSource,
+	type TaskToolSchemaInstance,
+} from "./types";
 import {
 	type AgentProgress,
 	type SingleResult,
@@ -69,6 +76,7 @@ import {
 	cfgTaskBatch,
 	cfgTaskDisabledAgents,
 	cfgTaskEnableEffort,
+	cfgTaskForkEnabled,
 	cfgTaskEnableLsp,
 	cfgTaskIsolationApply,
 	cfgTaskIsolationEnabled,
@@ -148,8 +156,10 @@ interface TaskDescriptionOptions {
 	batchEnabled: boolean;
 	effortEnabled: boolean;
 	evalToolsEnabled: boolean;
+	forkEnabled: boolean;
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
+	teamEnabled: boolean;
 	parentSpawns: string;
 }
 
@@ -183,11 +193,26 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		batchEnabled: options.batchEnabled,
 		effortEnabled: options.effortEnabled,
 		evalToolsEnabled: options.evalToolsEnabled,
+		forkEnabled: options.forkEnabled,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
+		teamEnabled: options.teamEnabled,
 	});
+}
+
+/**
+ * A fork reuses the parent's cached prefix only when the provider can grant the child's
+ * extra tools (`yield`) mid-conversation; elsewhere every tool change misses the cache.
+ */
+function modelSupportsFork(model: TaskForkSource["model"] | undefined): boolean {
+	const compat = model?.compat;
+	return (
+		compat !== undefined &&
+		"supportsMidConversationToolChanges" in compat &&
+		compat.supportsMidConversationToolChanges === true
+	);
 }
 
 function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
@@ -318,6 +343,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	} else if ("isolated" in params) {
 		spawn.isolated = params.isolated;
 	}
+	if (params.fork !== undefined) spawn.fork = params.fork;
 	return spawn;
 }
 
@@ -673,6 +699,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
 			evalToolsEnabled: evalToolsEnabled(this.session),
+			forkEnabled: this.#forkAvailable(),
 			defaultAgent: this.#defaultAgent(),
 		});
 	}
@@ -697,10 +724,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
 			evalToolsEnabled: evalToolsEnabled(this.session),
+			forkEnabled: this.#forkAvailable(),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+			teamEnabled: isTeamEnabled(this.session.settings, this.session.taskDepth ?? 0, this.session.enableIrc),
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
 		});
+	}
+
+	/** `fork` is advertised only when enabled and the active model can reuse the parent's cache. */
+	#forkAvailable(): boolean {
+		return cfgTaskForkEnabled.get(this.session.settings) && modelSupportsFork(this.session.getActiveModel?.());
 	}
 	private constructor(
 		private readonly session: ToolSession,
@@ -735,6 +769,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		index: number;
 		agentId?: string;
 		detached: boolean;
+		forkSource?: TaskForkSource;
 	}): SpawnRun {
 		return new SpawnRun(
 			this.#permit,
@@ -749,6 +784,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					spawn.detached,
 					run.timing,
 					spawn.detached ? run.onArtifactsRetained : undefined,
+					spawn.forkSource,
 				),
 			{ agentId: spawn.agentId, detached: spawn.detached },
 		);
@@ -766,6 +802,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal: AbortSignal,
 	): Promise<SpawnRun | undefined> {
 		if (spawn.tools?.length && this.session.getPlanModeState?.()?.enabled === true) return undefined;
+		// Forks need the parent snapshot taken once at dispatch; never start them early.
+		if (spawn.fork === true) return undefined;
 		let blocking: boolean;
 		try {
 			blocking = (await this.#resolveSpawnPreflight(spawn)).effectiveAgent.blocking === true;
@@ -858,6 +896,27 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(plan);
 		}
 		const { params, items: spawnItems, spawns: normalizedSpawnParams } = plan;
+		let forkSource: TaskForkSource | undefined;
+		if (params.fork === true) {
+			// One snapshot per call: batch items share the parent state at dispatch.
+			forkSource = await this.session.getTaskForkSource?.();
+			if (!forkSource) {
+				return {
+					...createTaskModeError(
+						"fork requires a persisted session with an active model; use a normal task with full context",
+					),
+					isError: true,
+				};
+			}
+			if (!modelSupportsFork(forkSource.model)) {
+				return {
+					...createTaskModeError(
+						`fork requires a model with mid-conversation tool changes (current: ${forkSource.model.provider}/${forkSource.model.id}); use a normal task with full context`,
+					),
+					isError: true,
+				};
+			}
+		}
 		const evalToolNames = spawnItems.flatMap(item => item.tools ?? []);
 		if (evalToolNames.length > 0) {
 			if (this.session.getPlanModeState?.()?.enabled === true) {
@@ -951,6 +1010,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				defaultAgent,
 				signal,
 				onUpdate,
+				forkSource,
 			);
 			if (!advisory) return result;
 			let appended = false;
@@ -1082,6 +1142,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					spawnParams: spawnParamsFor(params, spawn.item, defaultAgent),
 					agentId: spawn.agentId,
 					run: spawn.run,
+					forkSource,
 					progress: spawn.progress,
 					ircEnabled,
 					buildDetails: buildAsyncDetails,
@@ -1190,6 +1251,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			params,
 			defaultAgent,
 			signal,
+			forkSource,
 			spawns: syncSpawns.map(spawn => ({
 				item: spawn.item,
 				index: spawn.index,
@@ -1256,6 +1318,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		agentId: string;
 		/** Run already started while the call streamed; the job adopts it instead of launching. */
 		run?: SpawnRun;
+		/** Parent snapshot for a fork spawn. */
+		forkSource?: TaskForkSource;
 		progress: AgentProgress;
 		ircEnabled: boolean;
 		buildDetails: () => TaskToolDetails;
@@ -1268,6 +1332,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			spawnParams,
 			agentId,
 			run,
+			forkSource,
 			progress,
 			ircEnabled,
 			buildDetails,
@@ -1336,7 +1401,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					await reportProgress(updateText, buildDetails() as unknown as Record<string, unknown>);
 				};
 				const spawnRun =
-					run ?? this.#launch({ toolCallId, params: spawnParams, index: progress.index, agentId, detached: true });
+					run ??
+					this.#launch({
+						toolCallId,
+						params: spawnParams,
+						index: progress.index,
+						agentId,
+						detached: true,
+						forkSource,
+					});
 				spawnRun.attach({
 					signal: runSignal,
 					onUpdate: forwardSyncProgress,
@@ -1465,6 +1538,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		defaultAgent: string,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		forkSource?: TaskForkSource,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		if (spawns.length === 1) {
 			const spawn = spawns[0]!;
@@ -1476,6 +1550,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					index: spawn.index,
 					agentId: spawn.preAllocatedId,
 					detached: false,
+					forkSource,
 				});
 			run.attach({ signal, onUpdate });
 			return await run.result;
@@ -1502,6 +1577,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			params,
 			defaultAgent,
 			signal,
+			forkSource,
 			spawns,
 			onItemProgress: onUpdate
 				? (index, progress) => {
@@ -1539,9 +1615,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		defaultAgent: string;
 		spawns: SyncSpawnRef[];
 		signal?: AbortSignal;
+		forkSource?: TaskForkSource;
 		onItemProgress?: (index: number, progress: AgentProgress) => void;
 	}): Promise<(AgentToolResult<TaskToolDetails> | undefined)[]> {
-		const { toolCallId, params, defaultAgent, spawns, signal, onItemProgress } = args;
+		const { toolCallId, params, defaultAgent, spawns, signal, onItemProgress, forkSource } = args;
 		const { results } = await mapWithConcurrencyLimitAllSettled(
 			spawns,
 			spawns.length,
@@ -1554,6 +1631,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						index: spawn.index,
 						agentId: spawn.preAllocatedId,
 						detached: false,
+						forkSource,
 					});
 				run.attach({
 					signal: workerSignal,
@@ -1606,6 +1684,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		detached = false,
 		launchTiming?: { invokedAt: number; acquiredAt: number },
 		onArtifactsRetained?: (cleanup: () => Promise<void>) => void,
+		forkSource?: TaskForkSource,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
 		const assignment = (params.task ?? "").trim();
@@ -1646,6 +1725,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				invokedAt: launchTiming?.invokedAt,
 				acquiredAt: launchTiming?.acquiredAt,
 				...("isolated" in params ? { isolation: { requested: params.isolated } } : {}),
+				...(forkSource ? { forkSource } : {}),
 				blockedAgent: this.#blockedAgent,
 				enableLsp: (this.session.enableLsp ?? true) && cfgTaskEnableLsp.get(this.session.settings),
 				enableIrc: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),

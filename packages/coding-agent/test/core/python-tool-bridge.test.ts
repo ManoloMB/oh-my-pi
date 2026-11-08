@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { EvalCallScheduler } from "@oh-my-pi/pi-coding-agent/eval/call-scheduler";
 import { PYTHON_PRELUDE } from "@oh-my-pi/pi-coding-agent/eval/py/prelude";
 import {
 	disposePyToolBridge,
@@ -209,6 +210,107 @@ asyncio.run(check_intent())
 			unregister();
 		}
 	});
+
+	it("rejects the call past the cell's scheduler allowance", async () => {
+		const calls: FakeCall[] = [];
+		const readTool = makeFakeTool("read", calls, { content: [{ type: "text", text: "ok" }] });
+		const info = await ensurePyToolBridge();
+		const unregister = registerPyToolBridge("limit-session", "run-limit", {
+			toolSession: makeSession(new Map([["read", readTool]])),
+			scheduler: new EvalCallScheduler({ maxParallel: 10, maxCalls: 1, callsPerMinute: 2 }),
+		});
+		try {
+			const body = { session: "limit-session", run: "run-limit", name: "read", args: { path: "a" } };
+			expect(await (await call(info, body)).json()).toEqual({ ok: true, value: "ok" });
+			const second = (await (await call(info, body)).json()) as { ok: boolean; error?: string };
+			expect(second.ok).toBe(false);
+			expect(second.error).toContain("exceeded its limit");
+			expect(calls).toHaveLength(1);
+		} finally {
+			unregister();
+		}
+	});
+
+	it("marks failed tool results as ToolCallError in the response body", async () => {
+		const boom = makeFakeTool("boom", [], {
+			content: [{ type: "text", text: "kaboom" }],
+			details: { code: 7 },
+			isError: true,
+		} as AgentToolResult);
+		const info = await ensurePyToolBridge();
+		const unregister = registerPyToolBridge("tce-session", "run-tce", {
+			toolSession: makeSession(new Map([["boom", boom]])),
+		});
+		try {
+			const res = await call(info, { session: "tce-session", run: "run-tce", name: "boom", args: {} });
+			expect(await res.json()).toEqual({
+				ok: false,
+				error: "kaboom",
+				isToolCallError: true,
+				toolName: "boom",
+				text: "kaboom",
+				details: { code: 7 },
+			});
+		} finally {
+			unregister();
+		}
+	});
+
+	it("raises ToolCallError in Python for a failed tool call", async () => {
+		const boom = makeFakeTool("boom", [], {
+			content: [{ type: "text", text: "kaboom" }],
+			isError: true,
+		} as AgentToolResult);
+		const info = await ensurePyToolBridge();
+		const sessionId = `python-tce-${crypto.randomUUID()}`;
+		const unregister = registerPyToolBridge(sessionId, "run", {
+			toolSession: makeSession(new Map([["boom", boom]])),
+		});
+		try {
+			const prelude = PYTHON_PRELUDE.replace(
+				"from __future__ import annotations",
+				"from __future__ import annotations\n__omp_display = lambda *args, **kwargs: None",
+			);
+			const script = `${prelude}
+__omp_run_id__ = "run"
+async def check():
+    try:
+        await tool.boom()
+    except ToolCallError as e:
+        print(e.tool_name, e.text)
+asyncio.run(check())
+`;
+			const child = Bun.spawn([Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python"), "-"], {
+				stdin: new Response(script),
+				stdout: "pipe",
+				stderr: "pipe",
+				signal: AbortSignal.timeout(10_000),
+				env: {
+					...process.env,
+					PI_TOOL_BRIDGE_URL: info.url,
+					PI_TOOL_BRIDGE_TOKEN: info.token,
+					PI_TOOL_BRIDGE_SESSION: sessionId,
+				},
+			});
+			try {
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect({ exitCode, stdout: stdout.replaceAll("\r\n", "\n"), stderr }).toEqual({
+					exitCode: 0,
+					stdout: "boom kaboom\n",
+					stderr: "",
+				});
+			} finally {
+				child.kill();
+				await child.exited;
+			}
+		} finally {
+			unregister();
+		}
+	}, 15_000);
 
 	it("rejects requests with a bad bearer token", async () => {
 		const info = await ensurePyToolBridge();

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { createTools, resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 Bun.env.PI_PYTHON_SKIP_CHECK = "1";
 
@@ -412,5 +412,27 @@ describe("createTools", () => {
 		).map(t => t.name);
 		expect(names).toContain("checkpoint");
 		expect(names).toContain("rewind");
+	});
+});
+
+describe("session_search gating", () => {
+	it("exposes session_search only where eval (and its archive.find) is unavailable", async () => {
+		const withEval = await resolveBuiltinToolPlan(createTestSession());
+		expect(withEval.names).not.toContain("session_search");
+
+		const noEval = await resolveBuiltinToolPlan(
+			createTestSession({ settings: Settings.isolated({ "eval.py": false, "eval.js": false }) }),
+		);
+		expect(noEval.names).toContain("session_search");
+
+		const evalNotRequested = await resolveBuiltinToolPlan(createTestSession(), ["read", "session_search"]);
+		expect(evalNotRequested.names).toContain("session_search");
+
+		const disabled = await resolveBuiltinToolPlan(
+			createTestSession({
+				settings: Settings.isolated({ "eval.py": false, "eval.js": false, "archive.contentSearch": false }),
+			}),
+		);
+		expect(disabled.names).not.toContain("session_search");
 	});
 });

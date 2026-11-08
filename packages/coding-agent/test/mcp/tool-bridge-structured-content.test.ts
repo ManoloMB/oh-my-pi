@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type MCPToolDetails, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
+import { ToolCallError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
 import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import type { CustomToolContext, CustomToolResult } from "../../src/extensibility/custom-tools/types";
@@ -137,12 +138,17 @@ describe("MCP bridge structuredContent", () => {
 			expect(details.serverName).toBe("rhizome-mcp");
 			expect(details.mcpToolName).toBe("list_issues");
 			expect(details.isError).toBe(true);
-			const value = bridgeValueFromToolResult(tool.name, {}, result);
-			if (typeof value !== "object" || !("details" in value)) throw new Error("Expected eval details");
-			expect((value.details as MCPToolDetails).structuredContent).toEqual(structuredContent);
-			expect(value.hasError).toBe(true);
-			expect(value.text).not.toContain(structuredContent.pages[0]!.rows[0]!.body);
-			expect(value.text).toContain(`artifact://${artifactId}`);
+			let thrown: unknown;
+			try {
+				bridgeValueFromToolResult(tool.name, {}, result);
+			} catch (error) {
+				thrown = error;
+			}
+			if (!(thrown instanceof ToolCallError)) throw new Error("Expected the failed call to throw ToolCallError");
+			expect(thrown.toolName).toBe(tool.name);
+			expect((thrown.details as MCPToolDetails).structuredContent).toEqual(structuredContent);
+			expect(thrown.text).not.toContain(structuredContent.pages[0]!.rows[0]!.body);
+			expect(thrown.text).toContain(`artifact://${artifactId}`);
 
 			const message = {
 				role: "toolResult" as const,

@@ -99,6 +99,8 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 				// definitely splits into discard + kept and prepareCompaction()
 				// returns a non-empty preparation.
 				"compaction.keepRecentTokens": 4000,
+				// Expected budgets below derive from the static 15% reserve.
+				"compaction.adaptiveReserve": false,
 			}),
 			modelRegistry,
 		});

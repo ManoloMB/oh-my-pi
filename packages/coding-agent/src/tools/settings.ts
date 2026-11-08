@@ -386,6 +386,36 @@ export const cfgTodoRemindersMax = register({
 	},
 });
 
+export const cfgVerifyReminders = register({
+	id: "verify.reminders",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Todos",
+		label: "Verify Before Stopping",
+		description:
+			"Remind the agent to run a project check before stopping after it edited code without a passing verification",
+	},
+});
+
+export const cfgVerifyRemindersMax = register({
+	id: "verify.remindersMax",
+	type: "number",
+	default: 2,
+	ui: {
+		tab: "tools",
+		group: "Todos",
+		label: "Verify Reminder Limit",
+		description: "Maximum number of verification reminders per prompt",
+		options: [
+			{ value: "1", label: "1 reminder" },
+			{ value: "2", label: "2 reminders" },
+			{ value: "3", label: "3 reminders" },
+		],
+	},
+});
+
 export const cfgTodoEager = register({
 	id: "todo.eager",
 	type: "enum",
@@ -625,6 +655,30 @@ export const cfgArchiveEnabled = register({
 		label: "Archive",
 		description:
 			"Enable the read-only archive eval prelude: prompt history, recent projects, past sessions and recaps",
+	},
+});
+
+export const cfgArchiveContentSearch = register({
+	id: "archive.contentSearch",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Available Tools",
+		label: "Archive Content Search",
+		description: "Index past session content for archive.find/open",
+	},
+});
+
+export const cfgArchiveIndexThinking = register({
+	id: "archive.indexThinking",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "Available Tools",
+		label: "Index Thinking",
+		description: "Include assistant thinking blocks in the session content index",
 	},
 });
 

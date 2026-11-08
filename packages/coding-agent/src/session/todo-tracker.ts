@@ -74,7 +74,6 @@ export interface TodoTrackerHost {
 	planModeEnabled(): boolean;
 	/** Whether prewalk will hand off after its plan nudge owns todo creation. */
 	prewalkWillHandoff(): boolean;
-	consumeLastServedToolChoiceLabel(): string | undefined;
 }
 
 /** Owns canonical todo state, eager preludes, and completion reminders. */
@@ -216,8 +215,8 @@ export class TodoTracker {
 	}
 
 	/** Checks a terminal assistant turn and schedules continuation for incomplete todos. */
-	async checkCompletion(message: AssistantMessage): Promise<boolean> {
-		if (this.#host.consumeLastServedToolChoiceLabel() === "user-force") return false;
+	async checkCompletion(message: AssistantMessage, servedToolChoiceLabel: string | undefined): Promise<boolean> {
+		if (servedToolChoiceLabel === "user-force") return false;
 		if (this.#host.planModeEnabled()) return false;
 		if (this.#reminderAwaitingProgress) {
 			logger.debug("Todo completion: prior reminder still awaiting agent action; staying silent", {
@@ -412,7 +411,7 @@ function isResponseCueLine(line: string): boolean {
 	return USER_RESPONSE_CUE_RE.test(candidate);
 }
 
-function isAwaitingUserAnswer(message: AssistantMessage): boolean {
+export function isAwaitingUserAnswer(message: AssistantMessage): boolean {
 	const text = assistantText(message);
 	if (!text) return false;
 	const lines = text.split(/\r?\n/);

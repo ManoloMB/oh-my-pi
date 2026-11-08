@@ -11,7 +11,7 @@ import { shadowPlanIfPresent, snapshotVmContext } from "../js/context-manager";
 import type { RuntimeCallIdentity } from "../js/shared/runtime";
 import { shadowSnapshotDigest } from "../js/shared/runtime";
 import type { JsStatusEvent } from "../js/shared/types";
-import { bridgeValueFromToolResult } from "../js/tool-bridge";
+import { bridgeValueFromToolResult, evalBridgeOutputSchema } from "../js/tool-bridge";
 import { namespaceSessionId as namespacePythonSessionId } from "../py";
 import { shadowPlanPythonIfPresent, snapshotPythonNamespaceIfPresent } from "../py/executor";
 import { type ShadowClaimKey, ShadowClaimStore } from "./claim-store";
@@ -287,7 +287,14 @@ export class EvalShadowCellSession implements ToolSpeculationStreamSession {
 		committed: AgentToolResult<unknown>,
 	): void {
 		try {
-			const value = bridgeValueFromToolResult(name, args, committed);
+			const value = bridgeValueFromToolResult(
+				name,
+				args,
+				committed,
+				undefined,
+				undefined,
+				evalBridgeOutputSchema(this.#options.session, name),
+			);
 			this.#results.set(operationId, {
 				value,
 				origins: [{ kind: "local_read", resource: String(args.path ?? "") }],
@@ -316,7 +323,14 @@ export class EvalShadowCellSession implements ToolSpeculationStreamSession {
 	): Promise<unknown | undefined> {
 		const result = await this.claim(name, args, identity, remainingTimeoutMs);
 		if (!result) return undefined;
-		return bridgeValueFromToolResult(name, args, result, this.#options.emitStatus);
+		return bridgeValueFromToolResult(
+			name,
+			args,
+			result,
+			this.#options.emitStatus,
+			undefined,
+			evalBridgeOutputSchema(this.#options.session, name),
+		);
 	}
 
 	async #project(code: string, language: string): Promise<ShadowPlan | null> {

@@ -48,7 +48,7 @@ import {
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { resolveSpawnPolicy } from "./spawn-policy";
-import { type AgentDefinition, canSpawnAtDepth } from "./types";
+import { type AgentDefinition, canSpawnAtDepth, type TaskForkSource } from "./types";
 import type {
 	AgentProgress,
 	SingleResult,
@@ -124,6 +124,8 @@ export interface StructuredSubagentRequest {
 	invokedAt?: number;
 	acquiredAt?: number;
 	isolation?: StructuredSubagentIsolationControls;
+	/** Parent snapshot for a `task` fork spawn; the child inherits its transcript and prompt cache. */
+	forkSource?: TaskForkSource;
 	/** The parent agent name forbidden from recursively spawning itself. */
 	blockedAgent?: string;
 	/** Preserve a completed temporary artifacts directory for an agent:// handle. */
@@ -557,6 +559,7 @@ function buildExecutorOptions(
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
 		solutionSpace: request.solutionSpace?.trim() || undefined,
+		forkSource: request.forkSource,
 		...(policy.schema.source === "none"
 			? {}
 			: {

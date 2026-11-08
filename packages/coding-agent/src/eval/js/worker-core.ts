@@ -1,4 +1,4 @@
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolCallError, ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { JsRuntime, type RuntimeCallIdentity, type RuntimeHooks, shadowSnapshotDigest } from "./shared/runtime";
 import type {
 	RunErrorPayload,
@@ -81,6 +81,16 @@ function errorPayload(error: unknown): RunErrorPayload {
 }
 
 function errorFromPayload(payload: RunErrorPayload): Error {
+	if (payload.isToolCallError) {
+		const error = new ToolCallError(
+			payload.toolName ?? "",
+			payload.message,
+			payload.text ?? payload.message,
+			payload.details,
+		);
+		if (payload.stack) error.stack = payload.stack;
+		return error;
+	}
 	const ctor = payload.isToolError ? ToolError : Error;
 	const error = new ctor(payload.message);
 	if (payload.name) error.name = payload.name;

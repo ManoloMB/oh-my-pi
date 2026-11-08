@@ -56,6 +56,43 @@ export const cfgEvalToolsEnabled = register({
 	},
 });
 
+export const cfgEvalToolsMaxParallelCalls = register({
+	id: "eval.tools.maxParallelCalls",
+	type: "number",
+	default: 10,
+	ui: {
+		tab: "shell",
+		group: "Eval & Runtimes",
+		label: "Max Parallel Tool Calls",
+		description: "Maximum session tool calls one eval cell runs at once; exclusive tools (writes) always run alone",
+		options: [
+			{ value: "1", label: "1 call" },
+			{ value: "4", label: "4 calls" },
+			{ value: "10", label: "10 calls", description: "Default" },
+			{ value: "32", label: "32 calls" },
+		],
+	},
+});
+
+export const cfgEvalToolsMaxCallsPerMinute = register({
+	id: "eval.tools.maxCallsPerMinute",
+	type: "number",
+	default: 1024,
+	ui: {
+		tab: "shell",
+		group: "Eval & Runtimes",
+		label: "Max Tool Calls Per Minute",
+		description:
+			"Cap on session tool calls per eval cell, scaled by the cell's timeout (calls per minute of timeout); stops runaway loops early. 0 disables the cap",
+		options: [
+			{ value: "0", label: "Unlimited" },
+			{ value: "256", label: "256 per minute" },
+			{ value: "1024", label: "1024 per minute", description: "Default" },
+			{ value: "4096", label: "4096 per minute" },
+		],
+	},
+});
+
 export const cfgEvalWorkpoolFreshAgents = register({
 	id: "eval.workpool.freshAgents",
 	type: "boolean",

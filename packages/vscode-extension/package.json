@@ -2,7 +2,7 @@
 	"name": "maria-code",
 	"displayName": "MarIA Code",
 	"description": "MarIA Code, the coding agent for Unicaja developers: chat, sessions, models and settings inside VS Code",
-	"version": "0.31.0",
+	"version": "0.32.0",
 	"private": true,
 	"publisher": "javimp2003",
 	"license": "MIT",

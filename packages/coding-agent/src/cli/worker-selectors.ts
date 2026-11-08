@@ -23,3 +23,5 @@ export const STATS_ACTIVITY_WORKER_ARG = "__omp_worker_stats_activity";
 export const TEXT_PREDICT_WORKER_ARG = "__omp_worker_text_predict";
 /** Terminal-output selector shared by the CLI dispatcher and worker launcher. */
 export const TERMINAL_OUTPUT_WORKER_ARG = "__omp_worker_terminal_output";
+/** Session-search indexer selector shared by the CLI dispatcher and worker launcher. */
+export const SESSION_SEARCH_WORKER_ARG = "__omp_worker_session_search";

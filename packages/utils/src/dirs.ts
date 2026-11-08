@@ -933,6 +933,11 @@ export function getHistoryDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "history.db", "data");
 }
 
+/** Get the path to session-search.db (derived full-text index of past session content). */
+export function getSessionSearchDbPath(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, "session-search.db", "data");
+}
+
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");

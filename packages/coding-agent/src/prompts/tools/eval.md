@@ -10,7 +10,7 @@ On error, retry only the failed step; earlier steps may have taken effect.
 ```
 display(value)  print(value, ...)  log(message)  phase(title)
 read(path, offset?, limit?)  write(path, content)  env(key?, value?)  output(*ids, format?, query?, offset?, limit?)
-{{#if js}}await {{/if}}tool.<name>(args) — session tool; `args` is its parameter object
+{{#if js}}await {{/if}}tool.<name>(args) — session tool; a failing call throws `ToolCallError`
 wait(handles, timeout?=None, raise_errors?=True) — agent/completion barrier, ordered results{{#if js}}; JS: wait(handles, { timeout, raiseErrors }){{/if}}; `raise_errors=False` retains failures.
 ```
 </prelude>
@@ -22,6 +22,7 @@ wait(handles, timeout?=None, raise_errors?=True) — agent/completion barrier, o
 More globals; `read` the linked docs before first use:
 - `judge`, `{{#if py}}judge_batch{{else}}judgeBatch{{/if}}`, `completion`: classification, bulk judgment, model calls → `xd://eval/judge`
 - `%load`{{#if py}}, `%pip`{{/if}}{{#if js}}, `%bun add`{{/if}}, `budget`{{#if evalTools}}, `@tool`/`tool(fn)`{{/if}}: setup, installs, utilities → `xd://eval/helpers`
+- `tool.<name>` typed signatures and returns → `xd://eval/tools`
 {{#if spawns}}
 - `agent`, `workpool`: background subagents, DAG waves → `xd://eval/agents`
 {{/if}}

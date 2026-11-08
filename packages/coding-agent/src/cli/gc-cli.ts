@@ -14,6 +14,7 @@ import {
 	getHistoryDbPath,
 	getModelDbPath,
 	getReportsDir,
+	getSessionSearchDbPath,
 	getSessionsDir,
 	getStatsDbPath,
 	getTerminalSessionsDir,
@@ -29,6 +30,7 @@ import { BLOB_HASH_RE, BLOB_STAGING_RE, blobStagingPath } from "../session/blob-
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { parseTerminalBreadcrumb } from "../session/session-paths";
 import { readSessionHeaderId } from "../session/session-loader";
+import { deleteSessionSearchRows } from "../session/session-search/schema";
 import { FileSessionStorage, tryAcquireSessionLease } from "../session/session-storage";
 import {
 	cfgGcArchive,
@@ -97,6 +99,7 @@ export interface ArchiveGcResult {
 	wouldArchive: number;
 	archived: number;
 	historyRowsDeleted: number;
+	sessionDocsDeleted: number;
 	statsRowsDeleted: number;
 	ftsRebuilt: boolean;
 	errors: string[];
@@ -1058,7 +1061,9 @@ async function cleanupHistoryRowsForArchivedSessions(
 	result: ArchiveGcResult,
 ): Promise<void> {
 	const dbPath = getHistoryDbPath(options.agentDir);
-	if (!(await pathExists(dbPath))) return;
+	const searchDbPath = getSessionSearchDbPath(options.agentDir);
+	const hasHistoryDb = await pathExists(dbPath);
+	if (!hasHistoryDb && !(await pathExists(searchDbPath))) return;
 
 	const cleanupIds = new Set(archivedSessionIds);
 	try {
@@ -1067,12 +1072,19 @@ async function cleanupHistoryRowsForArchivedSessions(
 		result.errors.push(`history cleanup scan: ${errorMessage(error)}`);
 	}
 
+	if (hasHistoryDb) {
+		try {
+			const cleanup = deleteHistoryRowsForSessions(dbPath, [...cleanupIds]);
+			result.historyRowsDeleted = cleanup.deleted;
+			result.ftsRebuilt = cleanup.ftsRebuilt;
+		} catch (error) {
+			result.errors.push(`history cleanup: ${errorMessage(error)}`);
+		}
+	}
 	try {
-		const cleanup = deleteHistoryRowsForSessions(dbPath, [...cleanupIds]);
-		result.historyRowsDeleted = cleanup.deleted;
-		result.ftsRebuilt = cleanup.ftsRebuilt;
+		result.sessionDocsDeleted = deleteSessionSearchRows([...cleanupIds], searchDbPath);
 	} catch (error) {
-		result.errors.push(`history cleanup: ${errorMessage(error)}`);
+		result.errors.push(`session search cleanup: ${errorMessage(error)}`);
 	}
 }
 
@@ -1682,6 +1694,7 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 		wouldArchive: 0,
 		archived: 0,
 		historyRowsDeleted: 0,
+		sessionDocsDeleted: 0,
 		statsRowsDeleted: 0,
 		ftsRebuilt: false,
 		errors: [],
@@ -1998,7 +2011,7 @@ function renderText(result: GcResult): string {
 	}
 	if (result.archive) {
 		lines.push(
-			`sessions: ${result.archive.archived}/${result.archive.wouldArchive} archived, ${result.archive.historyRowsDeleted} history rows and ${result.archive.statsRowsDeleted} stats rows removed`,
+			`sessions: ${result.archive.archived}/${result.archive.wouldArchive} archived, ${result.archive.historyRowsDeleted} history rows, ${result.archive.sessionDocsDeleted} session search docs and ${result.archive.statsRowsDeleted} stats rows removed`,
 		);
 		if (result.archive.skippedActive > 0) lines.push(`sessions skipped active: ${result.archive.skippedActive}`);
 		if (result.archive.errors.length > 0) lines.push(`session errors: ${result.archive.errors.length}`);

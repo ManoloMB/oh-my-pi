@@ -13,6 +13,11 @@ export class SentToolDefinitions {
 		for (const tool of tools) this.#byName.set(tool.name, tool);
 	}
 
+	/** Recorded definitions in first-recorded order. */
+	snapshot(): Tool[] {
+		return [...this.#byName.values()];
+	}
+
 	/**
 	 * Definitions for names the latest `requestControls.tools.declared` in `messages` holds
 	 * that are not in `active`; undefined when none. Names never sent by this Agent are

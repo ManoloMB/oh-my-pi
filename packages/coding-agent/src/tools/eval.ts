@@ -14,6 +14,7 @@ import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
+import { computeEvalCallAllowance, EvalCallScheduler } from "../eval/call-scheduler";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { type EvalPreludeDefinition, evalPreludeSummary, getEnabledEvalPreludes } from "../eval/preludes";
 import { prepareEvalSource } from "../eval/input";
@@ -27,6 +28,7 @@ import evalAgentsTopic from "../prompts/tools/eval-agents.md" with { type: "text
 import evalJudgeTopic from "../prompts/tools/eval-judge.md" with { type: "text" };
 import evalHelpersTopic from "../prompts/tools/eval-helpers.md" with { type: "text" };
 import evalCodeModeDescription from "../prompts/tools/eval-code-mode.md" with { type: "text" };
+import evalToolsTopic from "../prompts/tools/eval-tools.md" with { type: "text" };
 import {
 	DEFAULT_MAX_BYTES,
 	OutputSink,
@@ -42,7 +44,10 @@ import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
-import { generateCodeModeDeclarations } from "@oh-my-pi/pi-tui/tools/eval-format/code-mode-declarations";
+import {
+	type CodeModeToolSpec,
+	generateCodeModeDeclarations,
+} from "@oh-my-pi/pi-tui/tools/eval-format/code-mode-declarations";
 import { recordStatusEvent, type StatusEventLog } from "@oh-my-pi/pi-tui/tools/eval";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { resolveOutputMaxColumns, resolveOutputSinkArtifactMaxBytes, resolveOutputSinkHeadBytes } from "./output-meta";
@@ -57,6 +62,8 @@ import {
 	cfgEvalAutoBackgroundThresholdMs,
 	cfgEvalAutoProvision,
 	cfgEvalToolsEnabled,
+	cfgEvalToolsMaxCallsPerMinute,
+	cfgEvalToolsMaxParallelCalls,
 } from "../eval/settings";
 import { cfgTaskMaxRecursionDepth } from "../task/settings";
 import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
@@ -373,9 +380,34 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	 * by the mid-session notice is readable before the description catches up.
 	 */
 	docTopics(): Record<string, string> {
-		return getEvalDocTopics({
+		const topics = getEvalDocTopics({
 			...this.#descriptionOptions(),
 			preludes: getEnabledEvalPreludes(this.session?.getEvalPreludes?.() ?? []),
+		});
+		if (this.session) {
+			topics.tools = prompt.render(evalToolsTopic, {
+				declarations: generateCodeModeDeclarations(this.#bridgeToolSpecs(this.session)),
+			});
+		}
+		return topics;
+	}
+
+	/** Bridge-callable tools as declaration specs, minus those the model calls directly. */
+	#bridgeToolSpecs(session: ToolSession, direct?: ReadonlySet<string>): CodeModeToolSpec[] {
+		return (session.getEvalBridgeToolNames?.() ?? [...(session.toolRegistry?.keys() ?? [])]).flatMap(name => {
+			if (direct?.has(name)) return [];
+			const tool = session.toolRegistry?.get(name) as
+				| { parameters?: unknown; description?: unknown; outputSchema?: unknown }
+				| undefined;
+			if (!tool) return [];
+			return [
+				{
+					name,
+					parameters: tool.parameters,
+					description: typeof tool.description === "string" ? tool.description : undefined,
+					outputSchema: tool.outputSchema,
+				},
+			];
 		});
 	}
 
@@ -420,14 +452,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const session = this.session;
 		const directToolNames = session?.getCodeModeDirectToolNames?.();
 		if (!session || !directToolNames) return undefined;
-		const direct = new Set(directToolNames);
-		const declarations = generateCodeModeDeclarations(
-			(session.getEvalBridgeToolNames?.() ?? [...(session.toolRegistry?.keys() ?? [])]).flatMap(name => {
-				if (direct.has(name)) return [];
-				const tool = session.toolRegistry?.get(name);
-				return tool ? [{ name, parameters: (tool as { parameters?: unknown }).parameters }] : [];
-			}),
-		);
+		const declarations = generateCodeModeDeclarations(this.#bridgeToolSpecs(session, new Set(directToolNames)));
 		const preludeDeclarations = this.#advertisedPreludes(session)
 			.map(definition => definition.codeModeDeclarations?.trim())
 			.filter((declaration): declaration is string => Boolean(declaration))
@@ -925,6 +950,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						? undefined
 						: clampTimeout("eval", cell.timeoutMs / 1000, cfgToolsMaxTimeout.get(session.settings)) * 1000;
 				const idle = idleTimeoutMs === undefined ? undefined : new IdleTimeout(idleTimeoutMs);
+				const callsPerMinute = cfgEvalToolsMaxCallsPerMinute.get(session.settings);
+				const callScheduler = new EvalCallScheduler({
+					maxParallel: cfgEvalToolsMaxParallelCalls.get(session.settings),
+					maxCalls: computeEvalCallAllowance(idleTimeoutMs, callsPerMinute),
+					callsPerMinute,
+				});
 				const combinedSignal =
 					signal && idle
 						? AbortSignal.any([signal, idle.signal, sessionAbortController.signal])
@@ -979,6 +1010,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							});
 							pushUpdate();
 						},
+						callScheduler,
 					});
 				} finally {
 					idle?.dispose();

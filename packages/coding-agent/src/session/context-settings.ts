@@ -68,6 +68,38 @@ export const cfgContextFilesExtra = register({
 	},
 });
 
+export const cfgContextFilesNestedAutoInject = register({
+	id: "contextFiles.nestedAutoInject",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "context",
+		group: "General",
+		label: "Auto-Inject Nested Context Files",
+		description:
+			"Inject AGENTS.md / CLAUDE.md (and extra context files) from subdirectories the first time a tool reads or edits inside them",
+	},
+});
+
+export const cfgContextFilesNestedMaxBytes = register({
+	id: "contextFiles.nestedMaxBytes",
+	type: "number",
+	default: 16000,
+	ui: {
+		tab: "context",
+		group: "General",
+		label: "Nested Context File Max Bytes",
+		description: "Maximum UTF-8 bytes of each auto-injected nested context file; longer files are truncated",
+		options: [
+			{ value: "4000", label: "4K bytes" },
+			{ value: "8000", label: "8K bytes" },
+			{ value: "16000", label: "16K bytes" },
+			{ value: "32000", label: "32K bytes" },
+			{ value: "64000", label: "64K bytes" },
+		],
+	},
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Context
 // ────────────────────────────────────────────────────────────────────────
@@ -278,6 +310,19 @@ export const cfgCompactionReserveTokens = register({
 	default: undefined,
 });
 
+export const cfgCompactionAdaptiveReserve = register({
+	id: "compaction.adaptiveReserve",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "context",
+		group: "Compaction",
+		label: "Adaptive Reserve",
+		description:
+			"Size the compaction reserve from observed per-turn output and context growth (never earlier than the 15% default)",
+	},
+});
+
 export const cfgCompactionKeepRecentTokens = register({
 	id: "compaction.keepRecentTokens",
 	type: "number",
@@ -405,9 +450,14 @@ export const cfgCompaction = combine({
 /**
  * Configured compaction policy ({@link cfgCompaction}). `baseWindowTokens` is
  * never configured directly: a `compaction.modelThresholds` token entry sets it
- * for its model (see `applyModelCompactionThreshold`).
+ * for its model (see `applyModelCompactionThreshold`). `adaptiveReserveTokens`
+ * is never configured either: the session derives it from observed usage when
+ * {@link cfgCompactionAdaptiveReserve} is on and no explicit reserve is set.
  */
-export type CompactionSettings = SettingValueOf<typeof cfgCompaction> & { baseWindowTokens?: number };
+export type CompactionSettings = SettingValueOf<typeof cfgCompaction> & {
+	baseWindowTokens?: number;
+	adaptiveReserveTokens?: number;
+};
 
 // Experimental: snapcompact inline imaging (transient, per-request; never persisted)
 export const cfgSnapcompactSystemPrompt = register({

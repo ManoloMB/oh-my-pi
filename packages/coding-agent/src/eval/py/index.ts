@@ -65,6 +65,7 @@ export default {
 			reset: opts.reset,
 			onChunk: opts.onChunk,
 			onStatus: opts.onStatus,
+			callScheduler: opts.callScheduler,
 			toolSession: opts.session,
 		};
 		const result = await executePython(code, executorOptions);

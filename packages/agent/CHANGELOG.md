@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `estimateAdaptiveReserveTokens()` and `CompactionSettings.adaptiveReserveTokens` for usage-based compaction reserves, `resolveToolConcurrencyMode()`, and the optional `AgentTool.outputSchema`
+- Added the `pinnedToolDefinitions` agent option and `getSentToolDefinitions()`, so a child agent can declare its parent's exact tool definitions and reuse the parent's prompt cache
+
+### Fixed
+
+- Fixed compaction persisting summaries cut off by the output-token limit: a truncated summary or handoff is retried once with a larger budget and no reasoning, then rejected so the next compaction method takes over
+
 ## [18.9.0] - 2026-10-11
 
 ### Fixed
