@@ -408,13 +408,22 @@ export class HistoryPanel {
 		return classes.join(" ");
 	}
 
-	/** Clicking opens the chat; focus stays in the search box except inside the rename field. */
-	#wireOpen(element: HTMLElement, item: SessionListItem, editing: boolean): void {
+	/**
+	 * Clicking opens the chat; focus stays in the search box except inside the rename field.
+	 * `intercept` may claim a click first (a card's near-miss of its info button).
+	 */
+	#wireOpen(
+		element: HTMLElement,
+		item: SessionListItem,
+		editing: boolean,
+		intercept?: (event: MouseEvent) => boolean,
+	): void {
 		element.addEventListener("mousedown", event => {
 			if (!(event.target as Element).closest(".history-rename")) event.preventDefault();
 		});
-		element.addEventListener("click", () => {
-			if (!editing) this.#open(item);
+		element.addEventListener("click", event => {
+			if (editing || intercept?.(event)) return;
+			this.#open(item);
 		});
 	}
 
@@ -528,12 +537,21 @@ export class HistoryPanel {
 			h("div", { className: "history-card-actions" }, rename, remove),
 		);
 		const flipped = !editing && item.path === this.#flipped;
-		const info = iconButton(flipped ? "close" : "info", flipped ? "Hide details" : "Show details", event => {
-			event.stopPropagation();
-			this.#toggleFlip(card, item, info);
-		});
-		info.classList.add("history-card-info");
-		info.ariaPressed = String(flipped);
+		// One button per face, inside it, so it turns with the face instead of hanging in the card's corner mid-turn.
+		const faceButton = (name: "info" | "close", title: string) => {
+			const button = iconButton(name, title, event => {
+				event.stopPropagation();
+				this.#toggleFlip(card, item);
+			});
+			button.classList.add("history-card-info");
+			return button;
+		};
+		const info = faceButton("info", "Show details");
+		info.ariaExpanded = String(flipped);
+		if (!editing) {
+			front.append(info);
+			back.append(faceButton("close", "Hide details"));
+		}
 		const card = h(
 			"div",
 			{
@@ -544,9 +562,15 @@ export class HistoryPanel {
 				dataset: { tooltip: item.active ? `Current chat · ${item.path}` : item.path },
 			},
 			h("div", { className: "history-card-inner" }, front, back),
-			editing ? null : info,
 		);
-		this.#wireOpen(card, item, editing);
+		this.#wireOpen(card, item, editing, event => {
+			// A click just off the corner button means the button, not "open the chat".
+			const face = card.classList.contains("flipped") ? back : front;
+			const button = face.querySelector<HTMLElement>(".history-card-info");
+			if (!button || !nearElement(button, event, INFO_GRACE_PX)) return false;
+			this.#toggleFlip(card, item);
+			return true;
+		});
 		// A re-render rebuilds the grid without its widened tracks: widen it again once the card is in place.
 		if (flipped) queueMicrotask(() => card.parentElement && widenColumn(card.parentElement, card));
 		return card;
@@ -556,29 +580,21 @@ export class HistoryPanel {
 	 * Turn `card` to its details (and any other turned card back), or turn it back.
 	 * Toggled on the live elements, not by re-rendering, so the turn animates.
 	 */
-	#toggleFlip(card: HTMLElement, item: SessionListItem, button: HTMLButtonElement): void {
+	#toggleFlip(card: HTMLElement, item: SessionListItem): void {
 		const grid = card.parentElement;
 		const turning = this.#flipped !== item.path;
 		for (const other of grid?.querySelectorAll<HTMLElement>(".history-card.flipped") ?? []) {
 			if (other !== card) this.#setFlipped(other, false);
 		}
 		this.#flipped = turning ? item.path : undefined;
-		this.#setFlipped(card, turning, button);
+		this.#setFlipped(card, turning);
 		if (grid) widenColumn(grid, turning ? card : undefined);
 	}
 
-	#setFlipped(
-		card: HTMLElement,
-		flipped: boolean,
-		button = card.querySelector<HTMLButtonElement>(".history-card-info"),
-	): void {
+	#setFlipped(card: HTMLElement, flipped: boolean): void {
 		card.classList.toggle("flipped", flipped);
-		if (!button) return;
-		const title = flipped ? "Hide details" : "Show details";
-		button.replaceChildren(icon(flipped ? "close" : "info"));
-		button.ariaLabel = title;
-		button.ariaPressed = String(flipped);
-		setTooltip(button, title);
+		const info = card.querySelector<HTMLButtonElement>(".history-card-front .history-card-info");
+		if (info) info.ariaExpanded = String(flipped);
 	}
 
 	/** Turn the shown flipped card back (Escape). */
@@ -717,19 +733,35 @@ const WIDE_COLUMN_FR: Record<number, number> = { 2: 1.4 };
 const WIDE_COLUMN_FR_DEFAULT = 1.6;
 /** A little past the CSS transition of `grid-template-columns`, so the equal tracks have settled. */
 const UNWIDEN_SETTLE_MS = 950;
-/** Pending return of a card grid to its own auto-fill columns. */
+/** Pending return of a card grid to its own auto-fit columns. */
 const unwidenTimers = new WeakMap<HTMLElement, number>();
+/** Extra pixels around a card's info button that still count as clicking it. */
+const INFO_GRACE_PX = 10;
+
+/** Whether the pointer of `event` lies within `grace` pixels of `element`'s box. */
+function nearElement(element: HTMLElement, event: MouseEvent, grace: number): boolean {
+	const box = element.getBoundingClientRect();
+	return (
+		event.clientX >= box.left - grace &&
+		event.clientX <= box.right + grace &&
+		event.clientY >= box.top - grace &&
+		event.clientY <= box.bottom + grace
+	);
+}
 
 /**
  * Widen the column of `card` in Today's card grid and narrow the others, or
  * (`card` undefined) bring them back to equal widths. Grid tracks only animate
- * between lists of the same length, so the auto-fill columns are first spelled
+ * between lists of the same length, so the auto-fit columns are first spelled
  * out as the explicit equal tracks the width gives, which looks the same; once
  * they are equal again the inline tracks go, so a resize re-flows the columns.
  */
 function widenColumn(cards: HTMLElement, card: HTMLElement | undefined): void {
 	window.clearTimeout(unwidenTimers.get(cards));
-	const count = getComputedStyle(cards).gridTemplateColumns.split(" ").filter(Boolean).length;
+	// auto-fit lists collapsed empty tracks as 0px: only the tracks holding cards count.
+	const count = getComputedStyle(cards)
+		.gridTemplateColumns.split(" ")
+		.filter(track => Number.parseFloat(track) > 0).length;
 	if (count < 2) return;
 	const equal = Array.from({ length: count }, () => "minmax(0, 1fr)").join(" ");
 	if (!card) {

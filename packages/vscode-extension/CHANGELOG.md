@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.34.0]
+
+### Changed
+
+- A history card's info button is a larger, tinted corner target, and a click just beside it still turns the card instead of opening the chat
+- Today's cards stretch across the whole width of the history: two chats split it in half, a single one takes it all
+- Today's cards use slightly smaller type, so the latest prompt shows five lines instead of four and the details on the back fit more text
+
+### Fixed
+
+- A history card's info and close buttons now turn with the card instead of floating outside it for a moment while it turns
+
 ## [0.33.0]
 
 ### Changed
