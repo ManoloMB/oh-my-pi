@@ -17,8 +17,8 @@ const now = new Date(2026, 10, 4, 10, 0).getTime();
 const at = (day: number, hour: number) => new Date(2026, 10, day, hour, 0).getTime();
 
 describe("history sections", () => {
-	it("puts running chats under Running even with proposals, and finished-unseen or proposals by day", () => {
-		expect(sectionOf(item({ activity: "running", proposals: 2, modified: at(1, 9) }), now)).toBe("running");
+	it("puts running chats under Today whenever they last changed, and finished-unseen or proposals by day", () => {
+		expect(sectionOf(item({ activity: "running", proposals: 2, modified: at(1, 9) }), now)).toBe("today");
 		expect(sectionOf(item({ activity: "done", modified: at(4, 9) }), now)).toBe("today");
 		expect(sectionOf(item({ proposals: 1, modified: at(3, 9) }), now)).toBe("yesterday");
 	});

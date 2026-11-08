@@ -2057,7 +2057,10 @@ code {
 }
 
 .history-match {
-	background: var(--vscode-editor-findMatchHighlightBackground, color-mix(in srgb, var(--omp-accent) 30%, transparent));
+	background: var(
+		--vscode-editor-findMatchHighlightBackground,
+		color-mix(in srgb, var(--omp-accent) 30%, transparent)
+	);
 	color: inherit;
 	border-radius: 2px;
 }
@@ -2105,11 +2108,11 @@ code {
 }
 
 /*
- * Today's chats: portrait cards in a grid. Hovering one turns it to its details
- * and grows it in place: its row grows with it, so the cards below slide down to
- * make room (nothing is covered) and slide back when it shrinks; the other cards
- * step back slightly so the turned one stands out. Its top-left corner never
- * moves, so the pointer stays on it while everything reorganizes.
+ * Today's chats: portrait cards in a grid. A card's info button turns it to its
+ * details and grows it in place: its row grows with it, so the cards below slide
+ * down to make room (nothing is covered) and slide back when it shrinks; the
+ * other cards step back slightly so the turned one stands out. Its top-left
+ * corner never moves, so the info button stays near the pointer.
  */
 .history-cards {
 	--card-height: 188px;
@@ -2123,7 +2126,7 @@ code {
 	align-items: start;
 	gap: 8px;
 	padding: 8px 4px 4px;
-	/* history.ts spells out the tracks while a card is hovered: its column widens, the others narrow. */
+	/* history.ts spells out the tracks while a card is turned: its column widens, the others narrow. */
 	transition: grid-template-columns var(--card-duration) var(--card-ease);
 }
 
@@ -2149,15 +2152,15 @@ code {
 }
 
 /* Renaming keeps the front (its name field) in view and the card at its size. */
-.history-card:hover:not(.editing) {
+.history-card.flipped:not(.editing) {
 	height: var(--card-open-height);
 }
 
-.history-card:hover:not(.editing) .history-card-inner {
+.history-card.flipped:not(.editing) .history-card-inner {
 	transform: rotateY(180deg);
 }
 
-.history-cards:has(.history-card:hover:not(.editing)) .history-card:not(:hover) {
+.history-cards:has(.history-card.flipped:not(.editing)) .history-card:not(.flipped) {
 	opacity: 0.6;
 	transform: scale(0.97);
 	filter: saturate(0.7);
@@ -2167,14 +2170,33 @@ code {
 	transition: box-shadow var(--card-duration) ease;
 }
 
-.history-card:hover:not(.editing) .history-card-face {
+.history-card:hover .history-card-face {
+	border-color: var(--vscode-focusBorder, var(--c-border-heavy));
+}
+
+.history-card.flipped:not(.editing) .history-card-face {
 	box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
 }
 
-.history-card.active:hover:not(.editing) .history-card-face {
+.history-card.active.flipped:not(.editing) .history-card-face {
 	box-shadow:
 		inset 0 3px 0 var(--omp-accent),
 		0 10px 28px rgb(0 0 0 / 0.35);
+}
+
+/* Turns the card; on top of both faces so it stays in the same corner, front or back. */
+.history-card-info {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	z-index: 2;
+	width: 20px;
+	height: 20px;
+	color: var(--c-fg-3);
+}
+
+.history-card-info[aria-pressed="true"] {
+	color: var(--c-fg);
 }
 
 .history-card-face {
@@ -2198,11 +2220,11 @@ code {
 }
 
 /* Only the face in view takes clicks, so the back's buttons work once it turned. */
-.history-card:hover:not(.editing) .history-card-front {
+.history-card.flipped:not(.editing) .history-card-front {
 	pointer-events: none;
 }
 
-.history-card:hover:not(.editing) .history-card-back {
+.history-card.flipped:not(.editing) .history-card-back {
 	pointer-events: auto;
 }
 
@@ -2217,12 +2239,14 @@ code {
 	outline-offset: -1px;
 }
 
-/* Clipped, not overflowing, while a neighbour's widening narrows this card. */
+/* Clipped, not overflowing, while a neighbour's widening narrows this card; clear of the info button. */
 .history-card-top {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	min-width: 0;
+	/* Margin, not padding: an overflow clip runs to the padding edge, so padding would not keep text clear. */
+	margin-right: 18px;
 	overflow: hidden;
 	white-space: nowrap;
 	color: var(--c-fg-3);
@@ -2295,6 +2319,8 @@ code {
 .history-card-facts {
 	flex: none;
 	margin: 0;
+	/* Clear of the info button in the corner. */
+	padding-right: 18px;
 	display: grid;
 	grid-template-columns: auto 1fr;
 	gap: 2px 8px;
@@ -2408,8 +2434,8 @@ code {
 		transition: none;
 	}
 
-	.history-cards:has(.history-card:hover:not(.editing)) .history-card:not(:hover),
-	.history-card:hover:not(.editing) .history-card-inner,
+	.history-cards:has(.history-card.flipped:not(.editing)) .history-card:not(.flipped),
+	.history-card.flipped:not(.editing) .history-card-inner,
 	.history-card-back {
 		transform: none;
 	}
@@ -2419,7 +2445,7 @@ code {
 		transition: opacity 0.15s;
 	}
 
-	.history-card:hover:not(.editing) .history-card-back {
+	.history-card.flipped:not(.editing) .history-card-back {
 		opacity: 1;
 	}
 }
@@ -2470,10 +2496,6 @@ code {
 	width: 12px;
 	height: 12px;
 	flex: none;
-}
-
-.history-section.running {
-	color: var(--c-fg-2);
 }
 
 .history-section-count {

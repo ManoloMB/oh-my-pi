@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0]
+
+### Changed
+
+- Today's history cards no longer turn over on hover: an info button in each card's top-right corner turns it to its details (click it again, or press Escape, to turn it back), and clicking the card itself opens the chat
+- The history has no Running section any more: a chat MarIA Code is working on shows first under Today, whenever it last changed, with its spinning marker
+
 ## [0.32.0]
 
 ### Changed

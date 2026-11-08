@@ -1,22 +1,21 @@
 /**
  * Where each chat of the history panel goes and how its row reads, apart from the
- * DOM so the rules can be tested: chats running, then the rest by calendar day
- * of their last change.
+ * DOM so the rules can be tested: chats by calendar day of their last change,
+ * with running chats always under Today.
  */
 import type { SessionListItem } from "../../src/protocol";
 
-export type SectionId = "running" | "today" | "yesterday" | "week" | "older";
+export type SectionId = "today" | "yesterday" | "week" | "older";
 
 /** Sections in display order with their headings. */
 export const SECTIONS: readonly { id: SectionId; title: string }[] = [
-	{ id: "running", title: "Running" },
 	{ id: "today", title: "Today" },
 	{ id: "yesterday", title: "Yesterday" },
 	{ id: "week", title: "This week" },
 	{ id: "older", title: "Older" },
 ];
 
-/** Sections folded on every opening (its count still shows on the heading): all but Today; Running never folds. */
+/** Sections folded on every opening (its count still shows on the heading): all but Today. */
 export const FOLDED_BY_DEFAULT: readonly SectionId[] = ["yesterday", "week", "older"];
 
 /** Local midnight `daysBack` days before the day of `now` (calendar days, so DST shifts don't move it). */
@@ -28,12 +27,12 @@ function dayStart(now: number, daysBack: number): number {
 }
 
 /**
- * A running chat is still working; any other goes by the local calendar day it
- * last changed ("This week" covers the 5 days before yesterday).
+ * A running chat is current work: it goes under Today (marked by its spinner)
+ * whenever it last changed. Any other goes by the local calendar day it last
+ * changed ("This week" covers the 5 days before yesterday).
  */
 export function sectionOf(item: SessionListItem, now: number): SectionId {
-	if (item.activity === "running") return "running";
-	if (item.modified >= dayStart(now, 0)) return "today";
+	if (item.activity === "running" || item.modified >= dayStart(now, 0)) return "today";
 	if (item.modified >= dayStart(now, 1)) return "yesterday";
 	if (item.modified >= dayStart(now, 6)) return "week";
 	return "older";

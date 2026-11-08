@@ -2,10 +2,10 @@
  * Session history overlay: a searchable list of chats covering the transcript,
  * filtered by two tabs: the workspace's sessions or the chats without a
  * workspace (it opens on the open chat's group). Chats are grouped under sticky
- * headings (see history-sections.ts): those running, then Today, Yesterday, This
- * week and Older; every section but Running folds, only Today starts unfolded,
- * and a search unfolds everything.
- * Today's chats show as portrait cards that flip on hover to more detail; the
+ * headings (see history-sections.ts): Today, Yesterday, This week and Older;
+ * every section folds, only Today starts unfolded, and a search unfolds
+ * everything. Running chats sit first under Today, with a spinning marker.
+ * Today's chats show as portrait cards whose info button flips them to more detail; the
  * other sections, and every section while searching, show rows with the chat's
  * name, its age and its latest prompt. Opening it asks
  * the host for `listSessions`; picking a row posts `openSession`, its pencil
@@ -66,6 +66,8 @@ export class HistoryPanel {
 	#selectedPath: string | undefined;
 	/** Path of the row whose name is being edited. */
 	#editing: string | undefined;
+	/** Path of Today's card turned to its details by its info button (one at a time). */
+	#flipped: string | undefined;
 	/** The tab shown: chats without a workspace, else the workspace's. */
 	#noWorkspace = false;
 	/** Whether this opening picked its tab yet (from the first `sessions` answer). */
@@ -170,6 +172,7 @@ export class HistoryPanel {
 	close(): void {
 		if (!this.isOpen) return;
 		this.#help.close();
+		this.#flipped = undefined;
 		this.element.hidden = true;
 		this.onModeChange(false);
 	}
@@ -232,7 +235,7 @@ export class HistoryPanel {
 		const slot = h("span", { className: "history-marker" });
 		if (item.activity === "running") {
 			slot.append(h("span", { className: "history-activity running" }));
-			setTooltip(slot, "Running");
+			setTooltip(slot, "MarIA Code is working on this session");
 		} else if (item.activity === "done") {
 			slot.append(h("span", { className: "history-activity done" }));
 			setTooltip(slot, "Finished while you were in another session");
@@ -275,12 +278,19 @@ export class HistoryPanel {
 		}
 		const now = Date.now();
 		const bySection = new Map<SectionId, SessionListItem[]>();
-		// The host lists them newest first: each section keeps that order.
+		// The host lists them newest first: each section keeps that order, running chats first.
 		for (const item of group) {
 			const id = sectionOf(item, now);
 			const items = bySection.get(id);
 			if (items) items.push(item);
 			else bySection.set(id, [item]);
+		}
+		const today = bySection.get("today");
+		if (today) {
+			bySection.set("today", [
+				...today.filter(item => item.activity === "running"),
+				...today.filter(item => item.activity !== "running"),
+			]);
 		}
 		// A search looks through every chat: folded sections show their matches.
 		const children: HTMLElement[] = [];
@@ -294,10 +304,7 @@ export class HistoryPanel {
 			if (folded) continue;
 			// Today's few chats read as cards; a search keeps rows, whose snippets show where it matched.
 			const cards = id === "today" && !searching ? h("div", { className: "history-cards" }) : undefined;
-			if (cards) {
-				cards.addEventListener("mouseleave", () => widenColumn(cards, undefined));
-				children.push(cards);
-			}
+			if (cards) children.push(cards);
 			for (const item of items) {
 				this.#matches.push(item);
 				const row = cards ? this.#card(item, now) : this.#row(item, now, terms, hits?.get(item.path));
@@ -325,8 +332,7 @@ export class HistoryPanel {
 			h("span", { className: "history-section-title" }, title),
 			h("span", { className: "history-section-count" }, String(count)),
 		];
-		// Running always shows unfolded: what is working stays in sight.
-		if (id === "running" || folded === undefined) {
+		if (folded === undefined) {
 			return h("div", { className: `history-section ${id}`, role: "presentation" }, ...content);
 		}
 		const toggle = h(
@@ -364,6 +370,8 @@ export class HistoryPanel {
 	#actions(item: SessionListItem): [HTMLButtonElement, HTMLButtonElement] {
 		const rename = iconButton("pencil", "Rename", event => {
 			event.stopPropagation();
+			// Renaming shows the front, where the name field is.
+			this.#flipped = undefined;
 			this.#editing = item.path;
 			this.#render();
 		});
@@ -444,9 +452,10 @@ export class HistoryPanel {
 
 	/**
 	 * Today's chat as a portrait card. The front tells chats apart at a glance:
-	 * state, age, name and where it was left. Hovering flips it to the back: when
-	 * it started, how long it ran, its size, its first and latest prompts, and
-	 * the rename and delete buttons. Renaming keeps the front in view.
+	 * state, age, name and where it was left. Clicking the card opens the chat;
+	 * its info button turns it to the back: when it started, how long it ran, its
+	 * size, its first and latest prompts, and the rename and delete buttons.
+	 * Renaming keeps the front in view.
 	 */
 	#card(item: SessionListItem, now: number): HTMLElement {
 		const editing = item.path === this.#editing;
@@ -518,22 +527,67 @@ export class HistoryPanel {
 			prompt("Last user message", item.lastPromptFull ?? item.lastPrompt),
 			h("div", { className: "history-card-actions" }, rename, remove),
 		);
+		const flipped = !editing && item.path === this.#flipped;
+		const info = iconButton(flipped ? "close" : "info", flipped ? "Hide details" : "Show details", event => {
+			event.stopPropagation();
+			this.#toggleFlip(card, item, info);
+		});
+		info.classList.add("history-card-info");
+		info.ariaPressed = String(flipped);
 		const card = h(
 			"div",
 			{
-				className: this.#stateClasses("history-card", item, editing),
+				className: this.#stateClasses("history-card", item, editing) + (flipped ? " flipped" : ""),
 				role: "option",
 				ariaSelected: "false",
 				ariaLabel: item.label,
 				dataset: { tooltip: item.active ? `Current chat · ${item.path}` : item.path },
 			},
 			h("div", { className: "history-card-inner" }, front, back),
+			editing ? null : info,
 		);
 		this.#wireOpen(card, item, editing);
-		card.addEventListener("mouseenter", () => {
-			if (!editing && card.parentElement) widenColumn(card.parentElement, card);
-		});
+		// A re-render rebuilds the grid without its widened tracks: widen it again once the card is in place.
+		if (flipped) queueMicrotask(() => card.parentElement && widenColumn(card.parentElement, card));
 		return card;
+	}
+
+	/**
+	 * Turn `card` to its details (and any other turned card back), or turn it back.
+	 * Toggled on the live elements, not by re-rendering, so the turn animates.
+	 */
+	#toggleFlip(card: HTMLElement, item: SessionListItem, button: HTMLButtonElement): void {
+		const grid = card.parentElement;
+		const turning = this.#flipped !== item.path;
+		for (const other of grid?.querySelectorAll<HTMLElement>(".history-card.flipped") ?? []) {
+			if (other !== card) this.#setFlipped(other, false);
+		}
+		this.#flipped = turning ? item.path : undefined;
+		this.#setFlipped(card, turning, button);
+		if (grid) widenColumn(grid, turning ? card : undefined);
+	}
+
+	#setFlipped(
+		card: HTMLElement,
+		flipped: boolean,
+		button = card.querySelector<HTMLButtonElement>(".history-card-info"),
+	): void {
+		card.classList.toggle("flipped", flipped);
+		if (!button) return;
+		const title = flipped ? "Hide details" : "Show details";
+		button.replaceChildren(icon(flipped ? "close" : "info"));
+		button.ariaLabel = title;
+		button.ariaPressed = String(flipped);
+		setTooltip(button, title);
+	}
+
+	/** Turn the shown flipped card back (Escape). */
+	#unflipShown(): void {
+		const card = this.#list.querySelector<HTMLElement>(".history-card.flipped");
+		this.#flipped = undefined;
+		if (!card) return;
+		this.#setFlipped(card, false);
+		if (card.parentElement) widenColumn(card.parentElement, undefined);
 	}
 
 	/** Inline name editor: Enter renames, Escape or leaving the field cancels. */
@@ -651,13 +705,14 @@ export class HistoryPanel {
 			case "Escape":
 				event.preventDefault();
 				if (this.#help.isOpen) this.#help.close();
+				else if (this.#flipped !== undefined) this.#unflipShown();
 				else this.close();
 				return;
 		}
 	}
 }
 
-/** Share of the row a hovered card's column takes, by column count; the other columns split the rest. */
+/** Share of the row a turned card's column takes, by column count; the other columns split the rest. */
 const WIDE_COLUMN_FR: Record<number, number> = { 2: 1.4 };
 const WIDE_COLUMN_FR_DEFAULT = 1.6;
 /** A little past the CSS transition of `grid-template-columns`, so the equal tracks have settled. */
