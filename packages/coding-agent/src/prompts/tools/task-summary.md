@@ -15,6 +15,20 @@
 {{preview}}
 </output>
 {{/if}}
+{{#if verification}}
+<verification note="execution evidence only; does not validate correctness">
+{{#each verification.checks}}
+- {{this.outcome}}: {{this.criterion}}{{#if this.detail}} — {{this.detail}}{{/if}}
+{{/each}}
+{{#if verification.citations}}
+{{#if verification.citations.none}}
+- citations: none cited
+{{else}}
+- citations: {{verification.citations.resolved}} resolved, {{verification.citations.failed}} failed, {{verification.citations.unknown}} unknown ({{verification.citations.cited}} cited)
+{{/if}}
+{{/if}}
+</verification>
+{{/if}}
 {{#if mergeSummary}}
 <merge-summary>
 {{mergeSummary}}

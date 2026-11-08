@@ -22,6 +22,7 @@ import {
 	writeArchive,
 } from "@oh-my-pi/pi-utils/ar";
 import { normalizeToLF } from "../edit/normalize";
+import { cfgEditEnforceReadBeforeWrite } from "../edit/settings";
 
 import { InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
 import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../lsp";
@@ -52,6 +53,7 @@ import {
 	unwrapHashlineHeaderPath,
 } from "./plan-mode-guard";
 import { decodeUtf8Text } from "./read-format";
+import { assertReadBeforeOverwrite, recordFileVersion } from "./read-versions";
 import { routeReadThroughBridge } from "./read-summary";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 
@@ -925,6 +927,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			// Check if file exists and is auto-generated before overwriting.
 			if (existing) {
 				await assertEditableFile(absolutePath, path, this.session.settings);
+				if (!target && existing.isFile() && cfgEditEnforceReadBeforeWrite.get(this.session.settings)) {
+					await assertReadBeforeOverwrite(this.session, absolutePath, displayPath);
+				}
 			}
 			await assertNotTruncatedFileReadProjection(
 				this.session,
@@ -956,6 +961,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				if (madeExecutable) {
 					resultText += `\n${EXECUTABLE_NOTICE}`;
 				}
+				await recordFileVersion(this.session, absolutePath);
 				return {
 					content: [{ type: "text", text: resultText }],
 					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
@@ -971,6 +977,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				this.session.bumpFileMutationVersion?.(absolutePath);
 			}
 			const finalContent = diagnostics.finalContent;
+			await recordFileVersion(this.session, absolutePath);
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
 
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);

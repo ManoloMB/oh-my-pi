@@ -287,6 +287,7 @@ import {
 	xdevEntries,
 } from "./tools";
 import { resolveYieldReportText } from "./tools/yield";
+import { clearFileVersions } from "./tools/read-versions";
 import { createBrowserPrelude } from "./tools/browser";
 import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
 import { createComputerPrelude } from "./tools/computer";
@@ -313,6 +314,9 @@ import { shutdownTinyTitleClient } from "./tiny/title-client";
 import { buildWorkspaceTree, collectAgentsMdIndex, type WorkspaceTree } from "./workspace-tree";
 import { resolveWorkspaceSnapshot, type WorkspaceSnapshot } from "./utils/workspace-snapshot";
 import { SessionSearchIndexClient } from "./session/session-search/client";
+import { attachCognitiveStyleObserver } from "./cognitive-style/observer";
+import { loadCognitiveStyleProfile, renderCognitiveStyleInstructions } from "./cognitive-style/profile";
+import { cfgMemoryCognitiveStyle } from "./memory-backend/settings";
 
 import {
 	cfgArchiveContentSearch,
@@ -3920,7 +3924,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							: builtInRegistryToolNames.has("manage_skill"),
 						learn: hasSession ? session.hasBuiltInTool("learn") : builtInRegistryToolNames.has("learn"),
 					});
+			const cognitiveStyleInstructions =
+				!isSubagentSession && !restrictToolNames && cfgMemoryCognitiveStyle.get(settings)
+					? renderCognitiveStyleInstructions(await loadCognitiveStyleProfile(agentDir))
+					: undefined;
 			const appendParts: string[] = [];
+			if (cognitiveStyleInstructions) appendParts.push(cognitiveStyleInstructions);
 			if (memoryInstructions) appendParts.push(memoryInstructions);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
 			// List each mounted MCP tool once. A routed tool that the xd:// catalog
@@ -4769,12 +4778,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					.catch(error => logger.debug("Session search warm-up failed", { error: String(error) }));
 			}, 15_000).unref();
 		}
+		// Only user-facing sessions: internal helpers (commit, compress, security, agent
+		// architect) restrict their tools or pin a fixed prompt and their "user" turns
+		// are machine-written, which would teach the profile the wrong style.
+		if (!isSubagentSession && !restrictToolNames && options.systemPrompt === undefined) {
+			session.addDisposer(attachCognitiveStyleObserver(session));
+		}
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics
 		// after a reset (#13370). The tools snapshot into THIS store, not the
 		// AgentSession's own lazy field.
 		session.registerSessionChangeCallback(() => toolSession.editStore?.clear());
+		session.registerSessionChangeCallback(() => clearFileVersions(toolSession));
 		if (ownedSkillDescriptionStore) {
 			// Let in-flight compressions land before releasing the file.
 			session.addDisposer(

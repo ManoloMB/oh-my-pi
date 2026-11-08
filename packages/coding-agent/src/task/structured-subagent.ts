@@ -34,6 +34,8 @@ import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
+import { normalizeAcceptanceCriteria, runAcceptanceChecks } from "./acceptance-checks";
+import { verifyReceiptCitations } from "../session/tool-receipts";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import {
 	applyEligibleNestedPatches,
@@ -71,6 +73,7 @@ import {
 	cfgTaskIsolationEnabled,
 	cfgTaskIsolationMerge,
 	cfgTaskMaxRecursionDepth,
+	cfgTaskReceiptsEnabled,
 } from "./settings";
 
 /** Final structured completion metadata returned for a schema-bearing run. */
@@ -117,6 +120,8 @@ export interface StructuredSubagentRequest {
 	effort?: TaskEffort;
 	/** Caller's description of how open-ended the work is; steers the child's `auto` thinking classification. */
 	solutionSpace?: string;
+	/** Advisory checks run after the child finishes; reported in the result, never change its status. */
+	acceptanceCriteria?: readonly string[];
 	identity?: StructuredSubagentIdentity;
 	index?: number;
 	parentToolCallId?: string;
@@ -211,8 +216,8 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
+function renderSubagentPrompt(assignment: string, acceptanceCriteria: readonly string[] = []): string {
+	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim(), acceptanceCriteria });
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -535,7 +540,7 @@ function buildExecutorOptions(
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment),
+		task: renderSubagentPrompt(request.assignment, normalizeAcceptanceCriteria(request.acceptanceCriteria)),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
@@ -636,7 +641,7 @@ function buildFailureResult(
 			id,
 			agent: policy.agent.name,
 			agentSource: policy.agent.source,
-			task: renderSubagentPrompt(request.assignment),
+			task: renderSubagentPrompt(request.assignment, normalizeAcceptanceCriteria(request.acceptanceCriteria)),
 			assignment: request.assignment.trim(),
 			description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,
 			exitCode: 1,
@@ -860,6 +865,20 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
 			mergeSummary = describeCapturedChanges(result);
 		}
+
+		const criteria = normalizeAcceptanceCriteria(request.acceptanceCriteria);
+		const checks =
+			criteria.length > 0
+				? await runAcceptanceChecks({
+						criteria,
+						cwd: request.session.cwd,
+						// Enabled but no tool calls minted receipts: an empty record, not "receipts off".
+						receipts: result.receipts ?? (cfgTaskReceiptsEnabled.get(request.session.settings) ? [] : undefined),
+						workspaceApplied: !policy.isIsolated || (changesApplied !== null && changesApplied !== false),
+					})
+				: [];
+		const citations = result.receipts ? verifyReceiptCitations(result.output, result.receipts) : undefined;
+		if (checks.length > 0 || citations) result.verification = { checks, ...(citations ? { citations } : {}) };
 
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
 		return {

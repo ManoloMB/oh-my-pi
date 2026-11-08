@@ -61,6 +61,7 @@ function toolSession(cwd: string, manager?: AsyncJobManager, options: { launch?:
 		asyncJobManager: manager,
 		settings: Settings.isolated({
 			"launch.enabled": options.launch ?? true,
+			"edit.enforceReadBeforeWrite": false,
 			"async.enabled": false,
 			"bash.autoBackground.enabled": false,
 			"bash.autoBackground.thresholdMs": 60_000,

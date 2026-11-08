@@ -2208,6 +2208,8 @@ export interface TaskItem {
 	task?: string;
 	/** How open-ended the work is; required by the schema and the child's sole `auto` thinking classification input. */
 	solutionSpace?: string;
+	/** Checks run after the child finishes and reported in the result; never change its status. */
+	acceptanceCriteria?: string[];
 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
 	effort?: "lo" | "med" | "hi";
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
@@ -2235,6 +2237,8 @@ export interface TaskParams {
 	task?: string;
 	/** How open-ended the work is (flat form); see {@link TaskItem.solutionSpace}. */
 	solutionSpace?: string;
+	/** Checks run after the child finishes and reported in the result; never change its status. */
+	acceptanceCriteria?: string[];
 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
 	effort?: "lo" | "med" | "hi";
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
@@ -2413,6 +2417,46 @@ export interface AgentProgress {
 	inflightTaskDetails?: TaskToolDetails;
 }
 
+export type ReceiptTestOutcome = "passed" | "failed" | "none";
+
+/** One recorded subagent tool call, numbered so the parent can cross-check citations (`[r3]`). */
+export interface ToolReceipt {
+	/** "r1", "r2", … */
+	id: string;
+	/** 1-based, monotonic per child session. */
+	seq: number;
+	toolCallId: string;
+	toolName: string;
+	status: "ok" | "error";
+	/** bash only: args.command, whitespace-collapsed, first 400 chars. */
+	command?: string;
+	/** bash only: details.exitCode (present only on failure). */
+	exitCode?: number;
+	/** bash only. */
+	testOutcome?: ReceiptTestOutcome;
+	at: number;
+}
+
+export type AcceptanceOutcome = "holds" | "does-not-hold" | "unverified";
+
+export interface AcceptanceCheck {
+	criterion: string;
+	outcome: AcceptanceOutcome;
+	detail: string;
+}
+
+export interface CitationCounts {
+	cited: number;
+	resolved: number;
+	failed: number;
+	unknown: number;
+}
+
+export interface SubagentVerification {
+	checks: AcceptanceCheck[];
+	citations?: CitationCounts;
+}
+
 /** Result from a single agent execution */
 export interface SingleResult {
 	index: number;
@@ -2456,6 +2500,10 @@ export interface SingleResult {
 	resolvedModelRoute?: string;
 	/** Retains {@link AgentProgress.advisor} after the advised session is disposed. */
 	advisor?: boolean;
+	/** Numbered tool calls recorded by the child session (`task.receipts.enabled`). */
+	receipts?: ToolReceipt[];
+	/** Advisory acceptance-criteria and citation checks; never changes the run's status. */
+	verification?: SubagentVerification;
 	error?: string;
 	aborted?: boolean;
 	abortReason?: string;

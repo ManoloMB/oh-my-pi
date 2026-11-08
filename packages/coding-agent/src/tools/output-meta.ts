@@ -11,8 +11,9 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
+import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 
@@ -23,6 +24,7 @@ import {
 	truncateTail,
 } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { formatOutputNotice, type OutputMeta, type TruncationMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { buildOutputSynopsis, renderOutputSynopsis, SYNOPSIS_MAX_INPUT_BYTES } from "./output-synopsis";
 import { renderError } from "./tool-errors";
 import {
 	cfgToolsArtifactHeadBytes,
@@ -31,6 +33,7 @@ import {
 	cfgToolsArtifactTailBytes,
 	cfgToolsArtifactTailLines,
 	cfgToolsOutputMaxColumns,
+	cfgToolsOutputSynopsis,
 } from "./settings";
 
 /** Input for {@link OutputMetaBuilder.limits}. `columnUnit` defaults to `chars`. */
@@ -535,6 +538,53 @@ export function resolveOutputSinkArtifactMaxBytes(s: Settings | undefined): numb
 	return Math.max(0, Math.floor(megabytes * 1024 * 1024));
 }
 
+function maybeRenderSynopsis(text: string, artifactId: string | undefined): string | undefined {
+	const synopsis = buildOutputSynopsis(text);
+	return synopsis ? renderOutputSynopsis(synopsis, artifactId) : undefined;
+}
+
+/**
+ * Prepend a synopsis to a result whose tool already saved the full output as an
+ * artifact (streaming bash/eval/ssh). Skipped when the artifact is only a
+ * head/tail sample, missing, or too large to analyze.
+ */
+async function withArtifactSynopsis(
+	result: AgentToolResult,
+	truncation: TruncationMeta,
+	sessionManager: NonNullable<AgentToolContext["sessionManager"]>,
+): Promise<AgentToolResult> {
+	const artifactId = truncation.artifactId;
+	if (!artifactId || truncation.artifactElidedBytes) return result;
+	const artifactPath = await sessionManager.getArtifactPath(artifactId);
+	if (!artifactPath) return result;
+	let text: string;
+	try {
+		const stat = await fs.stat(artifactPath);
+		if (stat.size > SYNOPSIS_MAX_INPUT_BYTES) return result;
+		text = await Bun.file(artifactPath).text();
+	} catch (error) {
+		// The synopsis is an aid: like the artifact save above, a read failure must
+		// never turn a successful tool call into an error.
+		if (!isEnoent(error)) {
+			logger.warn("Failed to read artifact for output synopsis", {
+				artifactId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return result;
+	}
+	const synopsisText = maybeRenderSynopsis(text, artifactId);
+	if (!synopsisText) return result;
+	const firstText = result.content.findIndex(block => block.type === "text");
+	const insertAt = firstText === -1 ? result.content.length : firstText;
+	const content: (TextContent | ImageContent)[] = [
+		...result.content.slice(0, insertAt),
+		{ type: "text", text: synopsisText },
+		...result.content.slice(insertAt),
+	];
+	return { ...result, content };
+}
+
 /**
  * If the tool result text exceeds the spill threshold, save the full output
  * as a session artifact and replace the content with a head+tail (middle
@@ -553,7 +603,12 @@ async function spillLargeResultToArtifact(
 
 	// Skip if tool already saved an artifact
 	const existingMeta: OutputMeta | undefined = result.details?.meta;
-	if (existingMeta?.truncation?.artifactId) return result;
+	const synopsisEnabled = context?.settings
+		? cfgToolsOutputSynopsis.get(context.settings)
+		: cfgToolsOutputSynopsis.default;
+	if (existingMeta?.truncation?.artifactId) {
+		return synopsisEnabled ? await withArtifactSynopsis(result, existingMeta.truncation, sessionManager) : result;
+	}
 
 	// A bounded page of artifact storage its source URL re-reads with `:N-M` is already
 	// recoverable. Spilling it would only create a redundant artifact holding another
@@ -617,13 +672,16 @@ async function spillLargeResultToArtifact(
 				maxLines: tailLines,
 			});
 
-	// Replace text blocks with single truncated block, keep images
+	const synopsisText = synopsisEnabled ? maybeRenderSynopsis(fullText, artifactId) : undefined;
+
+	// Replace text blocks with the synopsis (when detected) and a single truncated block, keep images
 	const newContent: (TextContent | ImageContent)[] = [];
 	for (const block of result.content) {
 		if (block.type !== "text") {
 			newContent.push(block);
 		}
 	}
+	if (synopsisText) newContent.push({ type: "text", text: synopsisText });
 	newContent.push({ type: "text", text: truncated.content });
 
 	// Build truncation meta

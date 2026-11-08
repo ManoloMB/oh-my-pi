@@ -15,7 +15,7 @@ function createSession(cwd: string): ToolSession {
 		getSessionSpawns: () => "*",
 		getArtifactsDir: () => path.join(cwd, "artifacts"),
 		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "edit.enforceReadBeforeWrite": false }),
 		enableLsp: false,
 	};
 }

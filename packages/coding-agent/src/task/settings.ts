@@ -251,6 +251,19 @@ export const cfgTaskBatch = register({
 	},
 });
 
+export const cfgTaskReceiptsEnabled = register({
+	id: "task.receipts.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Subagent Tool Receipts",
+		description:
+			"Number every subagent tool call ([r1], [r2] …) so the parent can cross-check the subagent's report and acceptance criteria against what actually ran",
+	},
+});
+
 export const cfgTaskSpeculativeLaunch = register({
 	id: "task.speculativeLaunch",
 	type: "boolean",
@@ -335,6 +348,25 @@ export const cfgTaskMaxConcurrency = register({
 			{ value: "16", label: "16 tasks" },
 			{ value: "32", label: "32 tasks" },
 			{ value: "64", label: "64 tasks" },
+		],
+	},
+});
+
+export const cfgTaskMaxSubagentsPerPrompt = register({
+	id: "task.maxSubagentsPerPrompt",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Max Subagents Per Prompt",
+		description: "Total subagents one user prompt may start (0 = unlimited)",
+		options: [
+			{ value: "0", label: "Unlimited" },
+			{ value: "10", label: "10" },
+			{ value: "20", label: "20" },
+			{ value: "50", label: "50" },
+			{ value: "100", label: "100" },
 		],
 	},
 });

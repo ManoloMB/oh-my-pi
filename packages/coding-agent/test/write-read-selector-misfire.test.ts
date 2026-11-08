@@ -20,7 +20,7 @@ function session(cwd: string): ToolSession {
 		enableLsp: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated({}),
+		settings: Settings.isolated({ "edit.enforceReadBeforeWrite": false }),
 	} as ToolSession;
 }
 

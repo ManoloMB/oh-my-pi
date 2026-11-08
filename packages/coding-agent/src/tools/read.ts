@@ -155,6 +155,7 @@ import { splitAddressableFileLines } from "@oh-my-pi/pi-tui/tools/hashline-forma
 import { readBinary, resolveBinaryViewPath } from "./read-binary";
 import { readSqlite, resolveSqliteReadPath } from "./read-sqlite";
 import { readJson, resolveJsonReadPath, splitJsonQueryTarget } from "./read-json";
+import { recordFileVersion } from "./read-versions";
 import {
 	getReadTextFileBridge,
 	isProseSummaryPath,
@@ -1110,6 +1111,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					const seenLines = staged.store.seenLines(staged.absolutePath, staged.snapshotHash);
 					getEditStore(this.session).recordSnapshot(staged.absolutePath, snapshotText, seenLines);
 				}
+				await recordFileVersion(this.session, staged.absolutePath);
 			}
 			appendRepeatReadHint(this.session, staged?.path ?? (context.args as ReadParams).path, result);
 			return await postProcessToolResult(result, this.name, this.session as unknown as AgentToolContext);
@@ -1647,6 +1649,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const result = await this.#executeInner(toolCallId, params, signal, onUpdate, toolContext);
+		const readFsPath = readDetailsLinkPath(result.details);
+		if (result.isError !== true && readFsPath && path.isAbsolute(readFsPath)) {
+			await recordFileVersion(this.session, readFsPath);
+		}
 		const displayTarget = InternalUrlRouter.instance().locateSync(params.path);
 		if (displayTarget && result.details) result.details.displayTarget = displayTarget;
 		appendRepeatReadHint(this.session, params.path, result);

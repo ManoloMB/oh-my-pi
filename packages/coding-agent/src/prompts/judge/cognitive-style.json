@@ -1,0 +1,42 @@
+{
+	"response_length": {
+		"instructions": "The state lists recent messages a user wrote to a coding assistant, oldest first. Judge only from how the user writes and what they ask of the assistant's answers; ignore pasted code, logs, and quoted text. Answer unclear unless several messages support one label. How long should answers be?",
+		"criteria": {
+			"terse": "Short messages, asks for brevity, or objects to long answers.",
+			"detailed": "Asks for more depth, fuller explanations, or complete detail.",
+			"unclear": "Not enough evidence."
+		}
+	},
+	"answer_order": {
+		"instructions": "The state lists recent messages a user wrote to a coding assistant, oldest first. Judge only from how the user writes and what they ask of the assistant's answers; ignore pasted code, logs, and quoted text. Answer unclear unless several messages support one label. How should answers be ordered?",
+		"criteria": {
+			"conclusion_first": "Wants the answer or decision up front.",
+			"step_by_step": "Wants the reasoning walked through before the conclusion.",
+			"unclear": "Not enough evidence."
+		}
+	},
+	"autonomy": {
+		"instructions": "The state lists recent messages a user wrote to a coding assistant, oldest first. Judge only from how the user writes and what they ask of the assistant's answers; ignore pasted code, logs, and quoted text. Answer unclear unless several messages support one label. Should the assistant act or ask first?",
+		"criteria": {
+			"act": "Gives direct instructions and expects them done without confirmation.",
+			"confirm": "Asks to see plans or approve before changes are made.",
+			"unclear": "Not enough evidence."
+		}
+	},
+	"pushback": {
+		"instructions": "The state lists recent messages a user wrote to a coding assistant, oldest first. Judge only from how the user writes and what they ask of the assistant's answers; ignore pasted code, logs, and quoted text. Answer unclear unless several messages support one label. How should the assistant handle disagreement?",
+		"criteria": {
+			"challenge": "Welcomes being corrected or asks to be challenged.",
+			"comply": "Wants their stated approach followed without debate.",
+			"unclear": "Not enough evidence."
+		}
+	},
+	"expertise": {
+		"instructions": "The state lists recent messages a user wrote to a coding assistant, oldest first. Judge only from how the user writes and what they ask of the assistant's answers; ignore pasted code, logs, and quoted text. Answer unclear unless several messages support one label. What expertise should the assistant assume?",
+		"criteria": {
+			"expert": "Uses precise technical language and skips basics.",
+			"explain": "Asks what terms mean or for concepts to be explained.",
+			"unclear": "Not enough evidence."
+		}
+	}
+}

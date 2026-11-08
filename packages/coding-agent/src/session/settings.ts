@@ -33,6 +33,7 @@ const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const EMPTY_STRING_ARRAYS_RECORD: Record<string, string[]> = {};
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["wait"];
+const DEFAULT_TOOL_FREQUENCY_EXEMPT_TOOLS: string[] = ["edit", "write", "ast_edit", "todo", "yield"];
 
 // Power assertions: macOS IOKit, Linux login1/ScreenSaver, Windows execution state.
 export const cfgPowerSleepPrevention = register({
@@ -342,6 +343,42 @@ export const cfgModelToolCallLoopGuardExemptTools = register({
 		group: "Thinking",
 		label: "Tool-Call Loop Exempt Tools",
 		description: "Tool names that may repeat consecutively without triggering the cross-turn loop guard",
+	},
+});
+
+export const cfgModelToolCallLoopGuardFrequencyThreshold = register({
+	id: "model.toolCallLoopGuard.frequencyThreshold",
+	type: "number",
+	default: 30,
+	ui: {
+		tab: "model",
+		group: "Thinking",
+		label: "Tool Frequency Threshold",
+		description: "Calls to one tool within the last 50 tool calls before a convergence reminder (0 disables)",
+	},
+});
+
+export const cfgModelToolCallLoopGuardFrequencyExemptTools = register({
+	id: "model.toolCallLoopGuard.frequencyExemptTools",
+	type: "array",
+	default: DEFAULT_TOOL_FREQUENCY_EXEMPT_TOOLS,
+	ui: {
+		tab: "model",
+		group: "Thinking",
+		label: "Tool Frequency Exempt Tools",
+		description: "Tools whose heavy use is normal and never triggers the frequency reminder",
+	},
+});
+
+export const cfgModelToolCallLoopGuardAlternation = register({
+	id: "model.toolCallLoopGuard.alternation",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "model",
+		group: "Thinking",
+		label: "Alternating Failure Guard",
+		description: "Warn when two tools keep failing in turn (A→B→A→B)",
 	},
 });
 

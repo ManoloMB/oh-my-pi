@@ -200,6 +200,13 @@ import titleCardPrompt from "../prompts/system/title-card.md" with { type: "text
 import titleForkPrompt from "../prompts/system/title-fork.md" with { type: "text" };
 import skillfulNoticePrompt from "../prompts/system/skillful-notice.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import toolAlternationWarningTemplate from "../prompts/system/tool-alternation-warning.md" with { type: "text" };
+import toolFrequencyWarningTemplate from "../prompts/system/tool-frequency-warning.md" with { type: "text" };
+import toolReceiptTemplate from "../prompts/system/tool-receipt.md" with { type: "text" };
+import type { ToolReceipt } from "@oh-my-pi/pi-tui/tools/task";
+import { deriveDelegations, renderDelegationLedger } from "../task/delegation-ledger";
+import { ToolPatternGuard } from "./tool-pattern-guard";
+import { deriveToolReceipts, mintToolReceipt, TOOL_RECEIPT_CUSTOM_TYPE } from "./tool-receipts";
 import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
@@ -494,6 +501,11 @@ import {
 	cfgTierGoogle,
 	cfgTierOpenai,
 	cfgProvidersAnthropicSlowMode,
+	cfgModelToolCallLoopGuardAlternation,
+	cfgModelToolCallLoopGuardEnabled,
+	cfgModelToolCallLoopGuardExemptTools,
+	cfgModelToolCallLoopGuardFrequencyExemptTools,
+	cfgModelToolCallLoopGuardFrequencyThreshold,
 	type ResetAutoRedeemMode,
 } from "./settings";
 import { type AnthropicSlowModeController, anthropicSlowModeLanes, formatUsageLimitLabel } from "./anthropic-slow-mode";
@@ -511,7 +523,13 @@ import {
 	cfgThemeDark,
 	cfgThemeLight,
 } from "../modes/settings";
-import { cfgTaskBatch, cfgTaskDisabledAgents, cfgTaskEnableEffort, cfgTaskIsolationEnabled } from "../task/settings";
+import {
+	cfgTaskBatch,
+	cfgTaskDisabledAgents,
+	cfgTaskEnableEffort,
+	cfgTaskIsolationEnabled,
+	cfgTaskReceiptsEnabled,
+} from "../task/settings";
 import {
 	cfgBranchSummaryReserveTokens,
 	cfgCompactionModelThresholds,
@@ -902,6 +920,9 @@ export class AgentSession implements SettingsScope {
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
+	#delegationLedgerArmed = true;
+	#nextReceiptSeq: number | undefined;
+	#toolPatternGuard = new ToolPatternGuard();
 	#clientBridge: ClientBridge | undefined;
 	#allowAcpAgentInitiatedTurns = false;
 	/** Session file created by this session's `/move`; removed on dispose if it stayed empty. */
@@ -2431,6 +2452,9 @@ export class AgentSession implements SettingsScope {
 			resetCodexProviderAfterCompaction: compaction => this.#resetCodexProviderAfterCompaction(compaction),
 			resetPlanReference: () => {
 				this.#planReferenceSent = false;
+			},
+			rearmDelegationLedger: () => {
+				this.#delegationLedgerArmed = true;
 			},
 			syncTodoPhasesFromBranch: () => {
 				this.#todo.syncFromBranch();
@@ -4984,7 +5008,92 @@ export class AgentSession implements SettingsScope {
 		}
 		// Awaited so a nested context notice joins the very next model request.
 		await this.#dirContext.afterToolCall(ctx);
-		return this.#ttsr.afterToolCall(ctx);
+		const ttsrResult = this.#ttsr.afterToolCall(ctx);
+		const parts = [
+			ttsrResult?.additionalContext,
+			this.#mintToolReceiptContext(ctx),
+			...this.#toolPatternWarnings(ctx),
+		].filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+		if (parts.length === 0) return ttsrResult;
+		return { ...ttsrResult, additionalContext: parts.join("\n\n") };
+	}
+
+	/** Records a numbered receipt for a subagent tool call; returns the model-facing receipt line. */
+	#mintToolReceiptContext(ctx: AfterToolCallContext): string | undefined {
+		if (this.#agentKind !== "sub" || !cfgTaskReceiptsEnabled.get(this.settings) || ctx.toolCall.name === "yield") {
+			return undefined;
+		}
+		if (this.#nextReceiptSeq === undefined) {
+			let maxSeq = 0;
+			for (const receipt of deriveToolReceipts(this.sessionManager.getEntries())) {
+				maxSeq = Math.max(maxSeq, receipt.seq);
+			}
+			this.#nextReceiptSeq = maxSeq + 1;
+		}
+		const receipt = mintToolReceipt({
+			seq: this.#nextReceiptSeq,
+			toolCallId: ctx.toolCall.id,
+			toolName: ctx.toolCall.name,
+			isError: ctx.isError,
+			args: ctx.args,
+			result: ctx.result,
+		});
+		this.sessionManager.appendCustomEntry(TOOL_RECEIPT_CUSTOM_TYPE, receipt);
+		this.#nextReceiptSeq++;
+		return prompt.render(toolReceiptTemplate, { id: receipt.id, toolName: receipt.toolName, status: receipt.status });
+	}
+
+	/** Frequency/alternation reminders for this call; warnings only, never aborts. */
+	#toolPatternWarnings(ctx: AfterToolCallContext): string[] {
+		const settings = this.settings;
+		if (!cfgModelToolCallLoopGuardEnabled.get(settings)) return [];
+		const frequencyExempt = new Set<string>();
+		for (const name of [
+			...cfgModelToolCallLoopGuardExemptTools.get(settings),
+			...cfgModelToolCallLoopGuardFrequencyExemptTools.get(settings),
+		]) {
+			if (typeof name === "string" && name.length > 0) frequencyExempt.add(name);
+		}
+		const detections = this.#toolPatternGuard.record(
+			{ toolName: ctx.toolCall.name, isError: ctx.isError },
+			{
+				frequencyThreshold: cfgModelToolCallLoopGuardFrequencyThreshold.get(settings),
+				frequencyExempt,
+				alternation: cfgModelToolCallLoopGuardAlternation.get(settings),
+			},
+		);
+		return detections.map(detection =>
+			detection.kind === "frequency"
+				? prompt.render(toolFrequencyWarningTemplate, {
+						tool_name: detection.toolName,
+						count: detection.count,
+						window: detection.window,
+					})
+				: prompt.render(toolAlternationWarningTemplate, { first: detection.first, second: detection.second }),
+		);
+	}
+
+	/** Numbered tool calls recorded by this (subagent) session. */
+	getToolReceipts(): ToolReceipt[] {
+		return deriveToolReceipts(this.sessionManager.getEntries());
+	}
+
+	/** Hidden ledger of delegated subagent work, injected once after resume or a history rewrite. */
+	#buildDelegationLedgerMessage(): CustomMessage | null {
+		if (!this.#delegationLedgerArmed) return null;
+		const content = renderDelegationLedger(deriveDelegations(this.sessionManager.getBranch()));
+		if (content === undefined) {
+			this.#delegationLedgerArmed = false;
+			return null;
+		}
+		return {
+			role: "custom",
+			customType: "delegation-ledger",
+			content,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
 	}
 	/**
 	 * Emits the extension `tool_call` event for a loop-dispatched call at
@@ -8073,6 +8182,8 @@ export class AgentSession implements SettingsScope {
 			if (delegateModeMessage) {
 				messages.push(delegateModeMessage);
 			}
+			const delegationLedgerMessage = this.#buildDelegationLedgerMessage();
+			if (delegationLedgerMessage) messages.push(delegationLedgerMessage);
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
 			}
@@ -8209,6 +8320,7 @@ export class AgentSession implements SettingsScope {
 			if (planReferenceMessage) {
 				this.#planReferenceSent = true;
 			}
+			if (delegationLedgerMessage) this.#delegationLedgerArmed = false;
 			try {
 				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions);
 			} finally {
@@ -10047,6 +10159,7 @@ export class AgentSession implements SettingsScope {
 			this.#verify.resetCycle();
 			this.#scopeCheckpoint.resetCycle();
 			this.#planReferenceSent = false;
+			this.#delegationLedgerArmed = true;
 			this.#planReferencePath = "local://PLAN.md";
 			this.#advisors.resetSessionState();
 			advisorRecordersDetached = false;
@@ -11705,6 +11818,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#delegationLedgerArmed = true;
 			this.#dirContext.reset();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });

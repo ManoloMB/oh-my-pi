@@ -23,6 +23,11 @@ import {
 import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
+import {
+	loadCognitiveStyleProfile,
+	renderCognitiveStyleInstructions,
+	resetCognitiveStyleProfile,
+} from "../../cognitive-style/profile";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
@@ -957,6 +962,20 @@ export class CommandController {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.ctx.settings.getAgentDir();
+
+		// The collaboration style is independent of the memory backend.
+		if (action === "style") {
+			if (argumentText.split(/\s+/)[1]?.toLowerCase() === "reset") {
+				await resetCognitiveStyleProfile(agentDir);
+				this.ctx.showStatus("Collaboration style reset.");
+				return;
+			}
+			const rendered = renderCognitiveStyleInstructions(await loadCognitiveStyleProfile(agentDir));
+			if (rendered) this.#showMarkdownPanel("Collaboration Style", rendered);
+			else this.ctx.showWarning("No collaboration style learned yet.");
+			return;
+		}
+
 		const backend = await resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
@@ -1037,7 +1056,9 @@ export class CommandController {
 			return;
 		}
 
-		this.ctx.showError("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync|mm ...>");
+		this.ctx.showError(
+			"Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync|style [reset]|mm ...>",
+		);
 	}
 
 	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {

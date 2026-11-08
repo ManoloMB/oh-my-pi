@@ -151,6 +151,18 @@ export const cfgEditEnforceSeenLines = register({
 	},
 });
 
+export const cfgEditEnforceReadBeforeWrite = register({
+	id: "edit.enforceReadBeforeWrite",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "files",
+		group: "Editing",
+		label: "Enforce Read-Before-Overwrite",
+		description: "Reject write overwrites of existing files this session has not read in their current version",
+	},
+});
+
 export const cfgEditBlackboxEnabled = register({
 	id: "edit.blackbox.enabled",
 	type: "boolean",

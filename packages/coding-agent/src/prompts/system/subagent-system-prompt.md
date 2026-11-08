@@ -50,6 +50,9 @@ Use peer messages only for quick coordination, never long-form content. Address 
 
 # Completion
 No TODO tracking, no progress updates. Execute; report results with `yield`.
+{{#if receiptsEnabled}}
+Receipts: after each tool batch you see lines like `Receipt [r3 bash]: ok`. In your final result, cite the receipt of every action claim (file written, command run, test passed) as `[r3]` or `[r3 bash]`. Main cross-checks citations against your execution record; uncited, failed or unknown citations count as unverified.
+{{/if}}
 
 While work remains, you MUST continue with another tool call — investigate, edit. Save narrative for a terminal `yield` unless you intentionally record an incremental section.
 

@@ -46,6 +46,7 @@ import {
 	invalidateFsScanAfterWrite,
 } from "../tools/fs-cache-invalidation";
 import { outputMeta } from "../tools/output-meta";
+import { forgetFileVersion, recordFileVersion } from "../tools/read-versions";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
@@ -669,6 +670,7 @@ export class EditTool implements AgentTool<TInput> {
 			}
 			invalidateFsScanAfterDelete(request.path);
 			this.session.bumpFileMutationVersion?.(request.path);
+			forgetFileVersion(this.session, request.path);
 			const diagnostics =
 				request.flushLsp && request.lspBatchId
 					? await flushLspWritethroughBatch(request.lspBatchId, this.session.cwd, signal)
@@ -703,6 +705,8 @@ export class EditTool implements AgentTool<TInput> {
 			invalidateFsScanAfterRename(request.path, request.moveTo);
 			this.session.bumpFileMutationVersion?.(request.path);
 			this.session.bumpFileMutationVersion?.(request.moveTo);
+			forgetFileVersion(this.session, request.path);
+			await recordFileVersion(this.session, request.moveTo);
 			const diagnostics =
 				request.flushLsp && request.lspBatchId
 					? await flushLspWritethroughBatch(request.lspBatchId, this.session.cwd, signal)
@@ -720,7 +724,10 @@ export class EditTool implements AgentTool<TInput> {
 			request.content,
 			signal,
 		);
-		if (bridge) return { written: bridge.text };
+		if (bridge) {
+			await recordFileVersion(this.session, request.path);
+			return { written: bridge.text };
+		}
 
 		// The pre-image is the only way to tell "the write never landed" from
 		// "something else rewrote the file"; a stat cannot (coarse mtimes).
@@ -775,6 +782,7 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		invalidateFsScanAfterWrite(request.path);
+		await recordFileVersion(this.session, request.path);
 		if (!began) this.session.bumpFileMutationVersion?.(request.path);
 		return {
 			written: diagnostics.finalContent,

@@ -1,5 +1,5 @@
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import { isTaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import { isTaskToolDetails, oneLineLabel } from "@oh-my-pi/pi-tui/tools/task";
 import { taskSubprocessRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
 /**
  * Task tool - Delegate tasks to specialized agents.
@@ -42,6 +42,13 @@ import { isIrcEnabled } from "../irc/messaging";
 import { isTeamEnabled } from "./team-board";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
+import {
+	countDelegationsSinceLastUserMessage,
+	DELEGATION_CUSTOM_TYPE,
+	type DelegationEntryData,
+	delegationStatus,
+	delegationVerificationCounts,
+} from "./delegation-ledger";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
 import {
 	type AgentDefinition,
@@ -81,6 +88,7 @@ import {
 	cfgTaskIsolationApply,
 	cfgTaskIsolationEnabled,
 	cfgTaskMaxConcurrency,
+	cfgTaskMaxSubagentsPerPrompt,
 	cfgTaskMaxRecursionDepth,
 	cfgTaskMaxRuntimeMs,
 	cfgTaskSpeculativeLaunch,
@@ -311,6 +319,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	}
 	const item: TaskItem = { name: params.name, agent: params.agent, task: params.task };
 	if ("solutionSpace" in params) item.solutionSpace = params.solutionSpace;
+	if ("acceptanceCriteria" in params) item.acceptanceCriteria = params.acceptanceCriteria;
 	if ("outputSchema" in params) item.outputSchema = params.outputSchema;
 	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
 	if ("tools" in params) item.tools = params.tools;
@@ -333,6 +342,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
 	if (item.solutionSpace !== undefined) spawn.solutionSpace = item.solutionSpace;
+	if ("acceptanceCriteria" in item) spawn.acceptanceCriteria = item.acceptanceCriteria;
 	if (params.context !== undefined) spawn.context = params.context;
 	if ("outputSchema" in item) spawn.outputSchema = item.outputSchema;
 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
@@ -896,6 +906,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(plan);
 		}
 		const { params, items: spawnItems, spawns: normalizedSpawnParams } = plan;
+		const cap = cfgTaskMaxSubagentsPerPrompt.get(this.session.settings);
+		if (cap > 0) {
+			const used = countDelegationsSinceLastUserMessage(this.session.sessionManager?.getBranch() ?? [], toolCallId);
+			if (used + spawnItems.length > cap) {
+				return createTaskModeError(
+					`Subagent cap reached: ${used} of ${cap} subagents already started since the last user message (task.maxSubagentsPerPrompt); this call asks for ${spawnItems.length} more. Finish with the subagents you have or ask the user to raise the cap.`,
+				);
+			}
+		}
 		let forkSource: TaskForkSource | undefined;
 		if (params.fork === true) {
 			// One snapshot per call: batch items share the parent state at dispatch.
@@ -1690,6 +1709,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const assignment = (params.task ?? "").trim();
 		const context = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		let latestProgress: AgentProgress | undefined;
+		const description = oneLineLabel(assignment, 160);
+		let runningRecorded = false;
 		try {
 			const execution = await runStructuredSubagent({
 				session: this.session,
@@ -1701,6 +1722,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
 				...(params.effort !== undefined ? { effort: params.effort } : {}),
 				solutionSpace: params.solutionSpace,
+				...(params.acceptanceCriteria?.length ? { acceptanceCriteria: params.acceptanceCriteria } : {}),
 				...(params.tools?.length
 					? {
 							customTools: createEvalCustomTools(
@@ -1733,6 +1755,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				signal,
 				onProgress: progress => {
 					latestProgress = { ...progress, recentTools: progress.recentTools.slice() };
+					if (!runningRecorded) {
+						runningRecorded = true;
+						this.#appendDelegation({
+							v: 1,
+							agentId: progress.id,
+							agent: progress.agent,
+							toolCallId,
+							description,
+							status: "running",
+							at: Date.now(),
+						});
+					}
 					onUpdate?.({
 						content: [{ type: "text", text: `Running agent ${progress.id}...` }],
 						details: {
@@ -1743,6 +1777,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						},
 					});
 				},
+			});
+			this.#appendDelegation({
+				v: 1,
+				agentId: execution.result.id,
+				agent: execution.result.agent,
+				toolCallId,
+				description,
+				status: delegationStatus(execution.result),
+				verification: delegationVerificationCounts(execution.result.verification),
+				at: Date.now(),
 			});
 			return this.#buildResultPayload(
 				execution.result,
@@ -1760,6 +1804,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const salvaged = settled
 				? { ...settled, error: settled.error ?? (cause instanceof Error ? cause.message : message) }
 				: undefined;
+			const delegatedId = salvaged?.id ?? preAllocatedId ?? latestProgress?.id;
+			if (delegatedId !== undefined) {
+				this.#appendDelegation({
+					v: 1,
+					agentId: delegatedId,
+					agent: salvaged?.agent ?? latestProgress?.agent ?? params.agent ?? "",
+					toolCallId,
+					description,
+					status: salvaged ? delegationStatus(salvaged) : "failed",
+					at: Date.now(),
+				});
+			}
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${message}` }],
 				isError: true,
@@ -1773,6 +1829,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				},
 			};
 		}
+	}
+
+	#appendDelegation(data: DelegationEntryData): void {
+		this.session.sessionManager?.appendCustomEntry(DELEGATION_CUSTOM_TYPE, data);
 	}
 
 	/** Build the tool result (summary text + details) for a settled run. */

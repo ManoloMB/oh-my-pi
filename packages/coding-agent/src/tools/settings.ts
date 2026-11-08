@@ -35,6 +35,19 @@ export const cfgToolsArtifactSpillThreshold = register({
 	},
 });
 
+export const cfgToolsOutputSynopsis = register({
+	id: "tools.outputSynopsis",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Output Limits",
+		label: "Structural Synopsis",
+		description:
+			"When output spills to an artifact, prepend its structure (JSON shape and keys, CSV columns and sample rows, code declarations)",
+	},
+});
+
 export const cfgToolsArtifactTailBytes = register({
 	id: "tools.artifactTailBytes",
 	type: "number",

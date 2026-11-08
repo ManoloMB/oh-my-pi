@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CompactionCancelledError } from "@oh-my-pi/pi-agent-core/compaction";
 import { logger, setProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	loadCognitiveStyleProfile,
+	renderCognitiveStyleInstructions,
+	resetCognitiveStyleProfile,
+} from "../cognitive-style/profile";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
@@ -553,10 +558,27 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			{ name: "mm seed", description: "Create any built-in mental models that are missing" },
 			{ name: "mm delete", description: "Delete a mental model from the bank (id required)" },
 			{ name: "mm reload", description: "Re-pull the cached <mental_models> block" },
+			{ name: "style", description: "Show the learned collaboration style" },
+			{ name: "style reset", description: "Forget the learned collaboration style" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
-			const verb = (command.args.trim().split(/\s+/)[0] ?? "").toLowerCase() || "view";
+			const tokens = command.args.trim().split(/\s+/);
+			const verb = (tokens[0] ?? "").toLowerCase() || "view";
+			// The collaboration style is independent of the memory backend.
+			if (verb === "style") {
+				const agentDir = runtime.settings.getAgentDir();
+				if ((tokens[1] ?? "").toLowerCase() === "reset") {
+					await resetCognitiveStyleProfile(agentDir);
+					await runtime.output("Collaboration style reset.");
+				} else {
+					await runtime.output(
+						renderCognitiveStyleInstructions(await loadCognitiveStyleProfile(agentDir)) ??
+							"No collaboration style learned yet.",
+					);
+				}
+				return commandConsumed();
+			}
 			const backend = await resolveMemoryBackend(runtime.settings);
 			switch (verb) {
 				case "view": {
@@ -608,7 +630,10 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 						runtime,
 					);
 				default:
-					return usage("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync>", runtime);
+					return usage(
+						"Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync|style [reset]>",
+						runtime,
+					);
 			}
 		},
 		handleTui: async (command, runtime) => {

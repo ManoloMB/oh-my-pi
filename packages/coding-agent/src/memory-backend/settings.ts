@@ -38,3 +38,18 @@ export const cfgMemoryBackend = register({
 		],
 	},
 });
+
+// Learned collaboration style (cognitive-style/): typed judgments over fixed
+// dimensions, independent of `memory.backend`.
+export const cfgMemoryCognitiveStyle = register({
+	id: "memory.cognitiveStyle",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "memory",
+		group: "General",
+		label: "Learn Collaboration Style",
+		description:
+			"Learn how you like answers (length, order, autonomy, pushback, depth) from your messages and apply it to new sessions; works with any memory backend, including off",
+	},
+});

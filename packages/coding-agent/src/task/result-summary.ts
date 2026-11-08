@@ -82,5 +82,17 @@ export function formatTaskResultSummary(
 				}
 			: undefined,
 		mergeSummary: options.mergeSummary === undefined ? "" : escapeHarnessTags(options.mergeSummary),
+		verification: result.verification
+			? {
+					checks: result.verification.checks.map(check => ({
+						outcome: check.outcome,
+						criterion: check.criterion,
+						detail: check.detail,
+					})),
+					citations: result.verification.citations
+						? { ...result.verification.citations, none: result.verification.citations.cited === 0 }
+						: undefined,
+				}
+			: undefined,
 	});
 }

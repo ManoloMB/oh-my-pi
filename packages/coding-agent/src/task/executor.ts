@@ -125,6 +125,7 @@ import {
 	type StructuredSubagentSchemaMode,
 	type StructuredSubagentSchemaSource,
 	type TaskToolDetails,
+	type ToolReceipt,
 	type YieldItem,
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
@@ -140,6 +141,7 @@ import {
 	cfgTaskMaxRecursionDepth,
 	cfgTaskAgentAdvisor,
 	cfgTaskAgentAccountPools,
+	cfgTaskReceiptsEnabled,
 } from "./settings";
 import {
 	cfgTierSubagent,
@@ -1271,6 +1273,9 @@ interface SubagentRunMonitor {
 	attach(session: AgentSession): () => void;
 	/** Best-effort capture of the last assistant text for cancelled-run salvage. */
 	captureSalvage(session: AgentSession): void;
+	/** Snapshot the child session's tool receipts before it is released. */
+	captureReceipts(session: AgentSession): void;
+	receipts(): ToolReceipt[] | undefined;
 	lastAssistantSalvageText(): string | undefined;
 	/**
 	 * Text of the last assistant turn that read as a report — prose, with no
@@ -2193,6 +2198,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		});
 	};
 
+	let capturedReceipts: ToolReceipt[] | undefined;
+	const captureReceipts = (session: AgentSession): void => {
+		// Test doubles are plain objects without the receipt accessor.
+		if (typeof session.getToolReceipts === "function") capturedReceipts = session.getToolReceipts();
+	};
+
 	const captureSalvage = (session: AgentSession): void => {
 		// Best-effort salvage: capture the last assistant text so
 		// cancelled/aborted children can surface "last activity" instead of
@@ -2292,6 +2303,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		},
 		attach,
 		captureSalvage,
+		captureReceipts,
+		receipts: () => capturedReceipts,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		lastReportTurnText: () => lastReportTurnText,
 		rawOutput: () => (finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("")),
@@ -2866,6 +2879,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	};
 	emitSubagentFrame(args.eventBus, args.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, settledPayload);
 
+	const receipts = monitor.receipts();
 	return {
 		index,
 		id,
@@ -2901,6 +2915,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		extractedToolData: progress.extractedToolData,
 		retryFailure: progress.retryFailure,
 		outputMeta,
+		...(receipts && receipts.length > 0 ? { receipts } : {}),
 	};
 }
 
@@ -3197,7 +3212,10 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		return async turnError => {
 			unsubscribeTurn();
 			const activeSession = turnMonitor.takeActiveSession();
-			if (activeSession) turnMonitor.captureSalvage(activeSession);
+			if (activeSession) {
+				turnMonitor.captureSalvage(activeSession);
+				turnMonitor.captureReceipts(activeSession);
+			}
 			const lastAssistant = session.getLastAssistantMessage();
 			const yielded = turnMonitor.yieldCalled();
 			const runtimeLimitExceeded = turnMonitor.runtimeLimitExceeded();
@@ -3624,7 +3642,10 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		}
 		attemptUnsubscribe();
 		const active = monitor.takeActiveSession();
-		if (active) monitor.captureSalvage(active);
+		if (active) {
+			monitor.captureSalvage(active);
+			monitor.captureReceipts(active);
+		}
 		monitor.finish();
 	}
 
@@ -3666,6 +3687,8 @@ interface SubagentPromptInputs {
 	ircRoot: { sessionFile?: string };
 	/** Fork spawns: the parent's exact system prompt blocks, sent verbatim so the child reuses its prompt cache. */
 	forkSystemPrompt?: string[];
+	/** Ask the child to cite its numbered tool receipts (`task.receipts.enabled`). */
+	receiptsEnabled: boolean;
 }
 
 /**
@@ -3720,6 +3743,7 @@ function renderSubagentPrompt(inputs: SubagentPromptInputs, launch?: SubagentLau
 		ircParkedCount: ircRoster?.parkedCount ?? 0,
 		ircOmittedCount: ircRoster?.omittedCount ?? 0,
 		ircSelfId: inputs.ircEnabled ? inputs.id : "",
+		receiptsEnabled: inputs.receiptsEnabled,
 	});
 }
 
@@ -4461,6 +4485,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					ircEnabled,
 					ircRoot: {},
 					forkSystemPrompt: forkSource?.systemPrompt,
+					receiptsEnabled: cfgTaskReceiptsEnabled.get(settings),
 				},
 			};
 
@@ -4771,6 +4796,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const session = monitor.takeActiveSession();
 			if (session) {
 				monitor.captureSalvage(session);
+				monitor.captureReceipts(session);
 				if (options.keepAlive !== false) {
 					attachIrcWakeTurnMonitor(session, wakeOptions);
 				}

@@ -488,6 +488,8 @@ export interface SessionMaintenanceHost {
 	closeCodexProviderSessionsForHistoryRewrite(): void;
 	resetCodexProviderAfterCompaction(compaction: CodexCompactionContext): void;
 	resetPlanReference(): void;
+	/** Re-inject the delegation ledger on the next prompt after a history rewrite. */
+	rearmDelegationLedger(): void;
 	syncTodoPhasesFromBranch(): void;
 	/** `compacted` marks a rewrite that replaced history with a summary. */
 	resetAdvisorRuntimes(reason?: string, options?: { compacted?: boolean }): void;
@@ -2500,6 +2502,7 @@ export class SessionMaintenance {
 		// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 		// the plan from disk and re-injects it on the next turn (issue #1246).
 		this.#host.resetPlanReference();
+		this.#host.rearmDelegationLedger();
 		this.#host.resetAdvisorRuntimes(args.advisorResetReason, { compacted: true });
 		this.#host.syncTodoPhasesFromBranch();
 		if (args.codexCompaction) {
@@ -4371,6 +4374,7 @@ export class SessionMaintenance {
 		// and advisor cursors / todo phases were derived from the replaced
 		// history.
 		this.#host.resetPlanReference();
+		this.#host.rearmDelegationLedger();
 		this.#host.resetAdvisorRuntimes("compaction-rescue", { compacted: true });
 		this.#host.syncTodoPhasesFromBranch();
 		this.#host.closeCodexProviderSessionsForHistoryRewrite();
