@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { CheckpointStore } from "./checkpoints/store";
 import { errorMessage } from "./chat/agent-host";
 import { CommandOutputStore } from "./chat/command-outputs";
+import { ExamplePromptStore } from "./chat/example-prompt-store";
 import type { ChatSession } from "./chat/chat-session";
 import { ChatRegistry } from "./chat/chat-views";
 import { agentDir, readConfig, workspaceCwd } from "./config";
@@ -25,6 +26,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const commandOutputs = new CommandOutputStore(path.join(context.globalStorageUri.fsPath, "command-outputs"));
 	const proposals = new SkillProposalStore(log);
 	context.subscriptions.push(proposals);
+	const examplePrompts = new ExamplePromptStore(context.globalState);
+	context.subscriptions.push(examplePrompts);
 	const chats: ChatRegistry = new ChatRegistry(
 		context.extensionUri,
 		log,
@@ -38,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		checkpoints,
 		proposals,
 		commandOutputs,
+		examplePrompts,
 	);
 	const changeViewer = new ChangeViewer();
 	// Running and finished-unseen marks for every session with a process in this window.

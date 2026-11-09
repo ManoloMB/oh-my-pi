@@ -22,6 +22,8 @@ const host = await Bun.build({
 });
 if (!host.success) throw new AggregateError(host.logs, "extension host build failed");
 
+const logo = await fs.readFile(path.join(root, "media", "maria-logo.png"));
+const logoDataUrl = `data:image/png;base64,${logo.toString("base64")}`;
 for (const view of ["chat", "settings"]) {
 	const result = await Bun.build({
 		entrypoints: [path.join(root, `webview/${view}/main.ts`)],
@@ -31,6 +33,8 @@ for (const view of ["chat", "settings"]) {
 		format: "esm",
 		minify: production,
 		sourcemap: production ? "none" : "inline",
+		// The logo's goodbye draws it in WebGL, which refuses cross-origin images: it ships inline.
+		define: { MARIA_LOGO_URL: JSON.stringify(logoDataUrl) },
 	});
 	if (!result.success) throw new AggregateError(result.logs, `${view} webview build failed`);
 	await fs.copyFile(path.join(root, `webview/${view}/${view}.css`), path.join(dist, "webview", `${view}.css`));

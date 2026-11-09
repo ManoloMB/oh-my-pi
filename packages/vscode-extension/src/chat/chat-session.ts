@@ -31,6 +31,7 @@ import {
 	type SessionTarget,
 } from "./agent-host";
 import type { AgentPool } from "./agent-pool";
+import type { ExamplePromptStore } from "./example-prompt-store";
 import { mentionCandidates } from "./mentioned-file";
 
 export interface ChatSurface {
@@ -74,6 +75,8 @@ export class ChatSession implements vscode.Disposable, HostView {
 		readonly pool: AgentPool,
 		/** Pending skill proposals of every session; the header shows the shown session's. */
 		readonly proposals: SkillProposalStore,
+		/** The empty chat's prompts, shared by every chat. */
+		readonly examplePrompts: ExamplePromptStore,
 	) {
 		surface.webview.options = {
 			enableScripts: true,
@@ -90,6 +93,7 @@ export class ChatSession implements vscode.Disposable, HostView {
 				this.#postProposals(true);
 				this.post({ type: "sessionProposals", counts: this.#proposalCounts() });
 			}),
+			examplePrompts.onDidChange(() => this.post({ type: "examplePrompts", ...examplePrompts.get() })),
 		);
 	}
 
@@ -450,11 +454,15 @@ export class ChatSession implements vscode.Disposable, HostView {
 				return;
 			case "ready":
 				this.#webviewReady = true;
+				this.post({ type: "examplePrompts", ...this.examplePrompts.get() });
 				this.#postProposals(true);
 				this.post({ type: "sessionActivity", activity: this.pool.activities() });
 				this.post({ type: "sessionProposals", counts: this.#proposalCounts() });
 				if (this.#host) await this.#host.replay(this);
 				else this.post({ type: "status", status: NO_PROCESS });
+				return;
+			case "setExamplePrompts":
+				await this.examplePrompts.set(request.prompts);
 				return;
 			case "prompt":
 				await this.#requireHost().prompt(request.text, request.images);

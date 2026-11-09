@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.35.0]
+
+### Added
+
+- While the composer is empty, its placeholder types out example prompts one after another (typed, held, erased, then the next), inviting you to write; it stays still while you type, in plan or delegate mode, while MarIA Code works, and when the OS asks for reduced motion
+- The prompts under the MarIA Code logo of a new chat are editable: "Editar prompts" lets you rewrite, remove or add up to 10 favourites and save them for every chat and window (Settings Sync carries them to your other machines); "Restaurar predeterminados" brings back the default ones
+- Sending the first prompt of a new chat plays a short goodbye of the logo (under 3 s, while the prompt is already being processed): MarIA turns her face to you, winks, and flies into the header mark as the conversation fades in; with reduced motion the logo just fades out
+- A new chat shows under the logo where it works: a green "Workspace" card with the project's name and folder, or a blue "Sin workspace" card ("Tareas generales") with its own folder and a different greeting; a link on the card opens a new chat of the other kind. The header's "No workspace" badge is blue to match
+
+### Changed
+
+- A Today card whose chat finished while you were elsewhere lights up with a softly glowing green neon border instead of a green dot; list rows keep the dot
+- The history marks only the open chat in blue (a blue border on its card, a blue bar on its row); hovering a card no longer turns its border blue, and the keyboard selection shows as a dashed outline only after you move it with the arrow keys
+- A Today card shows its delete button in the bottom-right corner of the front, styled like the info corner, so a chat can be deleted without turning the card; the back keeps only the rename button
+
+### Fixed
+
+- The task list button no longer stays stuck across new prompts: a list MarIA Code stopped updating (tasks left pending, in progress or blocked) clears at the request after it was last touched, and lists cleared or edited with `/todo` or `/tan` update the button
+
 ## [0.34.0]
 
 ### Changed

@@ -30,7 +30,7 @@ import type { CallSnapshot, CheckpointStore, RepoCheckpoint } from "../checkpoin
 import { type CallChangesResult, callChanges } from "../editor-changes/call-changes";
 import type { CommandOutputStore } from "./command-outputs";
 import { playCompletionSound } from "../sounds";
-import { ompCommand, readConfig, workspaceCwd, workspaceRoots } from "../config";
+import { displayPath, ompCommand, readConfig, workspaceCwd, workspaceRoots } from "../config";
 import { ensureNoWorkspaceFolder, rememberNoWorkspaceSession } from "../no-workspace";
 import { lastSystemCa } from "../system-ca";
 import { DialogBridge } from "../dialogs";
@@ -235,6 +235,8 @@ export class AgentHost implements vscode.Disposable {
 	#delegatedTask = false;
 	/** Sequence of `get_state` reads: an older read answering after a newer one is dropped. */
 	#stateReads = 0;
+	/** The folder omp runs in, as shown in the empty chat (home as `~`). */
+	#folder = "";
 	readonly #onDidChange = new vscode.EventEmitter<AgentHost>();
 	/** Fires when the process, session, title, model, busy or settled state changes. */
 	readonly onDidChange = this.#onDidChange.event;
@@ -337,6 +339,7 @@ export class AgentHost implements vscode.Disposable {
 	async start(target: SessionTarget): Promise<void> {
 		await this.#stopProcess();
 		const cwd = this.noWorkspace ? await ensureNoWorkspaceFolder() : workspaceCwd();
+		this.#folder = displayPath(cwd);
 		const command = await ompCommand(cwd);
 		if (lastSystemCa) {
 			this.log.appendLine(
@@ -1326,6 +1329,11 @@ export class AgentHost implements vscode.Disposable {
 		if (state.isSettled !== undefined) this.#settled = state.isSettled && !this.#busy;
 		if (state.sessionName) this.#title = state.sessionName;
 		else if (fileChanged) this.#title = undefined;
+		// Between turns omp's list is current; edits outside the `todo` tool show only here. A new
+		// session file is loaded with its transcript (`#sendSnapshot`), which decides what is ended.
+		if (!this.#busy && !fileChanged && state.todoPhases && this.#todos.sync(state.todoPhases)) {
+			this.post({ type: "todos", phases: this.#todos.phases });
+		}
 		this.post({
 			type: "state",
 			state,
@@ -1333,6 +1341,7 @@ export class AgentHost implements vscode.Disposable {
 			title: this.#title,
 			busySince: this.#busy ? this.#busySince : undefined,
 			noWorkspace: this.noWorkspace,
+			folder: this.#folder,
 		});
 		this.#onDidChange.fire(this);
 		this.#postPlanRun();
@@ -1364,6 +1373,7 @@ export class AgentHost implements vscode.Disposable {
 		this.#postedPlanRun = JSON.stringify(run);
 		this.post({ type: "planRun", run });
 		this.#todos.load(messages);
+		if (!this.#busy && this.#state?.todoPhases) this.#todos.sync(this.#state.todoPhases);
 		this.post({ type: "todos", phases: this.#todos.phases });
 		const [commands] = await Promise.all([
 			process.request("get_available_commands").catch(() => undefined),

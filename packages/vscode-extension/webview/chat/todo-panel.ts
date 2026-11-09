@@ -64,7 +64,7 @@ export class TodoPanel {
 			h(
 				"p",
 				{ className: "todo-note" },
-				"The checklist MarIA Code keeps for your request. A finished list clears at your next request.",
+				"The checklist MarIA Code keeps for your request. A finished list, or one MarIA Code stopped updating, clears at your next request.",
 			),
 		);
 		this.element = h("div", { className: "subagent-panel todo-panel" }, this.#trigger, this.#popover);

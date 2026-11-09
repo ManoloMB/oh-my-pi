@@ -264,6 +264,7 @@ export type ChatUpdate =
 	 * Session snapshot; re-sent after every turn, model change, or session switch.
 	 * `busySince` is when the session's running turn started (epoch ms), absent while idle.
 	 * `noWorkspace`: a chat without a workspace (runs in the no-workspace folder).
+	 * `folder`: the folder omp runs in, as shown to the user (home as `~`).
 	 */
 	| {
 			type: "state";
@@ -272,6 +273,7 @@ export type ChatUpdate =
 			title?: string;
 			busySince?: number;
 			noWorkspace: boolean;
+			folder: string;
 	  }
 	| { type: "models"; models: ModelChoice[] }
 	| { type: "thinkingLevels"; levels: ThinkingLevel[] }
@@ -333,7 +335,9 @@ export type ChatUpdate =
 	/** Background jobs (async bash, task, eval) of the shown session: running first, then those settled during the current task; empty when none. */
 	| { type: "asyncJobs"; jobs: AsyncJob[] }
 	/** omp's task list (`todo`) of the shown session, phases without tasks left out; empty when there is none (or a new task started after it finished). */
-	| { type: "todos"; phases: TodoPhase[] };
+	| { type: "todos"; phases: TodoPhase[] }
+	/** The empty chat's prompts under the logo; `custom` when they are the user's saved list rather than the defaults. */
+	| { type: "examplePrompts"; prompts: string[]; custom: boolean };
 
 /** Chat webview → host. */
 export type ChatRequest =
@@ -409,7 +413,9 @@ export type ChatRequest =
 	/** A shown prediction was accepted (Tab/→) or typed past, for the engine to learn from. */
 	| { type: "predictWordFeedback"; text: string; cursor: number; suggestion: string; accepted: boolean }
 	/** Keyboard focus entered or left the webview (drives the Ctrl+F keybinding's context). */
-	| { type: "focusChanged"; focused: boolean };
+	| { type: "focusChanged"; focused: boolean }
+	/** Keep `prompts` as the empty chat's prompts for every chat, or go back to the defaults with `null`; every chat gets `examplePrompts`. */
+	| { type: "setExamplePrompts"; prompts: string[] | null };
 
 /** One setting row in the settings panel (from `omp config list --json`). */
 export interface SettingEntry {

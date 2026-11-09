@@ -16,7 +16,11 @@ import { Transcript, brailleSpinner } from "./transcript";
 type ChatViewState = Partial<ComposerState>;
 
 const vscode = getVsCodeApi<ChatRequest, ChatViewState>();
-const post = (request: ChatRequest) => vscode.postMessage(request);
+// The first prompt of an empty chat goes out first; the logo's goodbye only paints over the view.
+const post = (request: ChatRequest) => {
+	vscode.postMessage(request);
+	if (request.type === "prompt") transcript.farewell(header.brand);
+};
 
 const header = new Header(post, () => history.toggle());
 // The History replaces the chat: the composer (with its queue and notices) has nothing to send to there.
@@ -177,6 +181,7 @@ function handle(update: ChatUpdate): void {
 			header.setState(state, update.stats, update.title, update.noWorkspace);
 			history.setChatNoWorkspace(update.noWorkspace);
 			transcript.setChangesAvailable(!update.noWorkspace);
+			transcript.setPlace(update.noWorkspace, update.folder);
 			composer.picker.setCurrent(state.model);
 			if (state.thinkingLevel) composer.picker.setThinkingLevel(state.thinkingLevel);
 			composer.setUsage(state, update.stats);
@@ -194,6 +199,9 @@ function handle(update: ChatUpdate): void {
 		}
 		case "models":
 			composer.picker.setModels(update.models);
+			break;
+		case "examplePrompts":
+			transcript.examples.set(update.prompts, update.custom);
 			break;
 		case "thinkingLevels":
 			composer.picker.setThinkingLevels(update.levels);

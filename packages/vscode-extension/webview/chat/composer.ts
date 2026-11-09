@@ -31,6 +31,7 @@ import { ModelPicker } from "./model-picker";
 import { PlanRunPanel } from "./plan-run-panel";
 import { ScopeCheckpointPanel } from "./scope-checkpoint";
 import { AsyncJobsPanel } from "./async-jobs";
+import { PlaceholderTypewriter } from "./placeholder-typewriter";
 import { TodoPanel } from "./todo-panel";
 import type { PromptRecall } from "./transcript";
 import { SubagentPanel } from "./subagent-panel";
@@ -97,6 +98,8 @@ export class Composer {
 		placeholder: PLACEHOLDER,
 		ariaLabel: "Prompt",
 	});
+	/** Invented prompts typed into the placeholder while the composer is empty and idle. */
+	#typewriter = new PlaceholderTypewriter(this.#input);
 	#send: HTMLButtonElement;
 	#stop: HTMLButtonElement;
 	#meter: ContextMeter;
@@ -351,7 +354,7 @@ export class Composer {
 				: "Plan mode: plan read-only before changing code";
 		setTooltip(this.#planToggle, title);
 		this.#planToggle.ariaLabel = title;
-		this.#input.placeholder = this.#placeholder();
+		this.#renderPlaceholder();
 		// Tracking an approved plan is not plan mode: the button only opens its progress.
 		this.#planToggle.ariaPressed = String(this.#planOn);
 		this.#planToggle.ariaHasPopup = tracking ? "dialog" : null;
@@ -366,7 +369,7 @@ export class Composer {
 
 	#renderDelegateToggle(): void {
 		this.#subagentPanel.setMode(this.#delegateAvailable, this.#delegateOn);
-		this.#input.placeholder = this.#placeholder();
+		this.#renderPlaceholder();
 	}
 
 	setQueue(steering: string[], followUp: string[], liveSteered = 0): void {
@@ -503,16 +506,25 @@ export class Composer {
 		this.#send.hidden = this.#busy && !hasContent;
 		this.#send.disabled = !hasContent || this.#input.disabled;
 		setTooltip(this.#send, this.#busy ? "Queue message (Enter)" : "Send (Enter)");
-		this.#input.placeholder = this.#placeholder();
+		this.#renderPlaceholder();
 		this.#ghost.setEnabled(!this.#input.disabled && this.#dictation.state === "idle");
 	}
 
-	#placeholder(): string {
+	/** A mode's own placeholder; otherwise the default one, animated while the draft is empty. */
+	#renderPlaceholder(): void {
+		const mode = this.#modePlaceholder();
+		this.#typewriter.setActive(
+			mode === undefined && !this.#input.disabled && this.#input.value === "",
+			mode ?? PLACEHOLDER,
+		);
+	}
+
+	#modePlaceholder(): string | undefined {
 		if (this.#dictation.state === "recording") return PLACEHOLDER_LISTENING;
 		if (this.#dictation.state === "transcribing") return PLACEHOLDER_TRANSCRIBING;
 		if (this.#busy) return PLACEHOLDER_BUSY;
 		if (this.#planOn) return PLACEHOLDER_PLAN;
-		return this.#delegateOn ? PLACEHOLDER_DELEGATE : PLACEHOLDER;
+		return this.#delegateOn ? PLACEHOLDER_DELEGATE : undefined;
 	}
 
 	#submit(): void {

@@ -45,6 +45,12 @@ export function workspaceRoots(): string[] {
 	return folders.length > 0 ? folders : [workspaceCwd()];
 }
 
+/** `dir` as shown to the user: under the home folder it starts with `~`. */
+export function displayPath(dir: string): string {
+	const home = os.homedir();
+	return dir === home || dir.startsWith(home + path.sep) ? `~${dir.slice(home.length)}` : dir;
+}
+
 export async function ompCommand(cwd: string): Promise<OmpCommand> {
 	const { executable, args, env } = readConfig();
 	// Keep session titles (RPC skips them by default) so the sessions list reads well. The OS store's

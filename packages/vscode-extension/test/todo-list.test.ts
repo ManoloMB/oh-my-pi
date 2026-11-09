@@ -30,7 +30,7 @@ describe("TodoListTracker", () => {
 		expect(tracker.phases[0]?.tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 	});
 
-	it("keeps an unfinished list through follow-ups and clears a finished one at the next prompt", () => {
+	it("keeps an unfinished list through the next prompt and clears a finished one at the next prompt", () => {
 		const tracker = new TodoListTracker();
 		tracker.load([todo(["completed", "pending"]), prompt()]);
 		expect(tracker.phases).toHaveLength(1);
@@ -40,5 +40,44 @@ describe("TodoListTracker", () => {
 		expect(tracker.apply(prompt({ synthetic: true }))).toBe(false);
 		expect(tracker.apply(prompt())).toBe(true);
 		expect(tracker.phases).toEqual([]);
+	});
+
+	it("clears an unfinished list omp left untouched through a whole request", () => {
+		const tracker = new TodoListTracker();
+		tracker.load([todo(["completed", "in_progress"]), prompt()]);
+		expect(tracker.phases).toHaveLength(1);
+		expect(tracker.apply(prompt())).toBe(true);
+		expect(tracker.phases).toEqual([]);
+
+		// Writing the list again brings it back.
+		expect(tracker.apply(todo(["completed", "blocked"]))).toBe(true);
+		expect(tracker.phases[0]?.tasks.map(task => task.status)).toEqual(["completed", "blocked"]);
+	});
+
+	it("adopts omp's list when it was edited outside the tool, and keeps an ended list hidden otherwise", () => {
+		const tracker = new TodoListTracker();
+		tracker.load([todo(["completed", "pending"])]);
+		expect(tracker.sync([])).toBe(true);
+		expect(tracker.phases).toEqual([]);
+
+		tracker.load([todo(["completed", "completed"]), prompt()]);
+		const finished: TodoPhase[] = [
+			{
+				name: "Build",
+				tasks: [
+					{ content: "step 0", status: "completed" },
+					{ content: "step 1", status: "completed" },
+				],
+			},
+		];
+		expect(tracker.sync(finished)).toBe(false);
+		expect(tracker.phases).toEqual([]);
+
+		const edited: TodoPhase[] = [{ name: "Fix", tasks: [{ content: "redo", status: "pending" }] }];
+		expect(tracker.sync(edited)).toBe(true);
+		expect(tracker.phases).toEqual(edited);
+		// A user-edited list counts as touched: the next prompt keeps it.
+		expect(tracker.apply(prompt())).toBe(false);
+		expect(tracker.phases).toEqual(edited);
 	});
 });

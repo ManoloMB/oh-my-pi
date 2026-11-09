@@ -16,11 +16,13 @@ import type {
 } from "../../src/protocol";
 import { isSkillPromptDetails, isUserPrompt, type SkillPromptDetails, skillPromptDraft } from "../../src/protocol";
 import { parseQuotedPrompt, type QuotedPrompt, quotedPrompt } from "../../src/quoted-prompt";
-import { button, h, iconButton } from "../dom";
+import { h, iconButton } from "../dom";
 import { icon } from "../icons";
 import { setTooltip } from "../tooltip";
 import { fileLink, parseFileRef, thumbnail } from "./content";
+import { ExamplePrompts } from "./example-prompts";
 import { openLightbox } from "./lightbox";
+import { playFarewell, preloadFarewell } from "./logo-farewell";
 import { renderMarkdown } from "./markdown";
 import { MessageEditor } from "./message-editor";
 import { SelectionReply } from "./selection-reply";
@@ -32,11 +34,6 @@ import { ToolCard, truncatedPre } from "./tools";
 type LiveEvent = RpcAgentEvent & { messageId?: string };
 type Post = (request: ChatRequest) => void;
 
-const EXAMPLE_PROMPTS = [
-	"Dame una visión general de este código",
-	"Busca posibles bugs en mis cambios recientes",
-	"Escribe tests para el archivo que tengo abierto",
-];
 const PIN_THRESHOLD_PX = 32;
 /** Blocks of an assistant message that are steps of the turn's timeline (a dot on its rail). */
 const STEP_SELECTOR = ".markdown, .thinking, .activity, .thumbs, .msg-footer";
@@ -348,6 +345,18 @@ export class Transcript {
 		this.#elapsed,
 	);
 	#empty: HTMLElement;
+	/** The empty chat's prompts under the logo. */
+	readonly examples: ExamplePrompts;
+	#brand = h("div", { className: "empty-brand", role: "img", ariaLabel: "MarIA Code · Unicaja" });
+	#emptyTitle = h("div", { className: "empty-title" }, "¿Qué construimos hoy con MarIA Code?");
+	#emptyHint = h(
+		"div",
+		{ className: "empty-hint" },
+		"Escribe / para comandos y skills · Shift+Enter para nueva línea",
+	);
+	/** Where the chat works (this project, or no workspace), under the title; hidden until the first `state`. */
+	#place = h("div", { className: "empty-place", hidden: true });
+	#farewellPlaying = false;
 	#pill = h(
 		"button",
 		{
@@ -406,15 +415,17 @@ export class Transcript {
 		/** Asks for the feedback when a plan card's "Refine plan" is clicked. */
 		private readonly planFeedback: PlanFeedbackDialog,
 	) {
-		const chips = EXAMPLE_PROMPTS.map(prompt => button(prompt, "example", () => onExample(prompt)));
+		this.examples = new ExamplePrompts(post, onExample);
 		this.#empty = h(
 			"div",
 			{ className: "empty" },
-			h("div", { className: "empty-brand", role: "img", ariaLabel: "MarIA Code · Unicaja" }),
-			h("div", { className: "empty-title" }, "¿Qué construimos hoy con MarIA Code?"),
-			h("div", { className: "empty-hint" }, "Escribe / para comandos y skills · Shift+Enter para nueva línea"),
-			h("div", { className: "examples" }, ...chips),
+			this.#brand,
+			this.#emptyTitle,
+			this.#place,
+			this.#emptyHint,
+			this.examples.element,
 		);
+		preloadFarewell();
 		this.#scroller.append(this.#empty, this.#list, this.#working);
 		this.element = h("div", { className: "transcript-wrap" }, this.#scroller, this.#pinnedRow, this.#pill);
 		this.element.append(new SelectionReply(this.#scroller, this.element, onReply).element);
@@ -450,6 +461,22 @@ export class Transcript {
 	/** The prompts sent in the shown chat, oldest first. */
 	recentPrompts(): readonly PromptRecall[] {
 		return this.#recall;
+	}
+
+	/** The first prompt of an empty chat: the logo says goodbye (landing on `mark`) while the conversation appears. */
+	farewell(mark: HTMLElement): void {
+		if (this.#empty.hidden || this.#farewellPlaying) return;
+		this.#farewellPlaying = true;
+		playFarewell({
+			brand: this.#brand,
+			empty: this.#empty,
+			captions: [this.#emptyTitle, this.#place, this.#emptyHint, this.examples.element],
+			conversation: [this.#list, this.#working],
+			mark,
+			onDone: () => {
+				this.#farewellPlaying = false;
+			},
+		});
 	}
 
 	/** The host did not resend an edited prompt: its editor becomes editable again. */
@@ -545,6 +572,46 @@ export class Transcript {
 	/** Chats without a workspace keep no file snapshots: hide "See changes". */
 	setChangesAvailable(available: boolean): void {
 		this.element.classList.toggle("changes-unavailable", !available);
+	}
+
+	/** The empty chat shows where it works: the project (`folder`) or, for `noWorkspace`, its own folder. */
+	setPlace(noWorkspace: boolean, folder: string): void {
+		const kind = noWorkspace ? "none" : "workspace";
+		if (this.#place.dataset.place === kind && this.#place.dataset.folder === folder) return;
+		this.#emptyTitle.textContent = noWorkspace
+			? "¿En qué te ayudo hoy con MarIA Code?"
+			: "¿Qué construimos hoy con MarIA Code?";
+		const name = noWorkspace ? "Tareas generales" : folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+		const switchTo = h(
+			"button",
+			{ type: "button", className: "empty-place-switch" },
+			icon(noWorkspace ? "plus" : "plusGlobe"),
+			noWorkspace ? "Nuevo chat en el proyecto" : "Nuevo chat sin workspace",
+		);
+		switchTo.addEventListener("click", () =>
+			this.post(noWorkspace ? { type: "newSession" } : { type: "newSession", noWorkspace: true }),
+		);
+		this.#place.dataset.place = kind;
+		this.#place.dataset.folder = folder;
+		this.#place.replaceChildren(
+			h("span", { className: "empty-place-icon" }, icon(noWorkspace ? "globe" : "folder")),
+			h(
+				"div",
+				{ className: "empty-place-body" },
+				h("div", { className: "empty-place-kind" }, noWorkspace ? "Sin workspace" : "Workspace"),
+				h("div", { className: "empty-place-name" }, name),
+				h(
+					"div",
+					{ className: "empty-place-desc" },
+					noWorkspace
+						? "Fuera de cualquier proyecto, en su propia carpeta"
+						: "Lee y edita el código de este proyecto",
+				),
+				h("div", { className: "empty-place-path", dataset: { tooltip: folder } }, folder),
+				switchTo,
+			),
+		);
+		this.#place.hidden = false;
 	}
 
 	/** Open or fold every thinking block; blocks rendered later follow the same state. */

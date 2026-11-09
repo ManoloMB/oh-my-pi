@@ -22,6 +22,8 @@ type Post = (request: ChatRequest) => void;
 
 export class Header {
 	readonly element: HTMLElement;
+	/** The MarIA Code mark at the start of the bar, where the empty chat's logo lands on the first prompt. */
+	readonly brand = h("span", { className: "brand", ariaHidden: "true" });
 	#title = h("div", { className: "session-title" }, "New chat");
 	#rename: HTMLButtonElement;
 	#input = h("input", { type: "text", className: "title-input", ariaLabel: "Session name", hidden: true });
@@ -109,7 +111,7 @@ export class Header {
 		this.element = h(
 			"header",
 			{ className: "header" },
-			h("span", { className: "brand", ariaHidden: "true" }),
+			this.brand,
 			this.#title,
 			this.#input,
 			this.#curationSpinner,

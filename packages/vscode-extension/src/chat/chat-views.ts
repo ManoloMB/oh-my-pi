@@ -12,6 +12,7 @@ import { readConfig } from "../config";
 import type { AgentHost, SessionTarget } from "./agent-host";
 import { AgentPool } from "./agent-pool";
 import { ChatSession, type ChatSurface } from "./chat-session";
+import type { ExamplePromptStore } from "./example-prompt-store";
 import type { SkillProposalStore } from "../skills/proposals";
 
 type SessionCommands = ChatSession["commands"];
@@ -41,6 +42,8 @@ export class ChatRegistry implements vscode.WebviewViewProvider, vscode.Disposab
 		/** Pending skill proposals every chat header shows. */
 		readonly proposals: SkillProposalStore,
 		commandOutputs: CommandOutputStore,
+		/** The empty chat's prompts every chat shows. */
+		readonly examplePrompts: ExamplePromptStore,
 	) {
 		this.pool = new AgentPool(log, checkpoints, commandOutputs);
 		this.pool.onNeedsAttention(host => void this.#offerHost(host));
@@ -129,7 +132,15 @@ export class ChatRegistry implements vscode.WebviewViewProvider, vscode.Disposab
 	}
 
 	#createView(surface: ChatSurface): ChatSession {
-		const session = new ChatSession(surface, this.extensionUri, this.log, this.commands, this.pool, this.proposals);
+		const session = new ChatSession(
+			surface,
+			this.extensionUri,
+			this.log,
+			this.commands,
+			this.pool,
+			this.proposals,
+			this.examplePrompts,
+		);
 		session.onDidChange(() => {
 			if (session === this.active) this.#onDidChangeActive.fire(session);
 		});

@@ -11,8 +11,9 @@
  * the host for `listSessions`; picking a row posts `openSession`, its pencil
  * renames it in place (`renameSession`), its trash deletes it after the host's
  * confirmation (`deleteSession`). Sessions working in the window show a spinner,
- * those that finished unseen a green dot and a bold name, the open one an accent
- * bar, and those with skill proposals a pill counting them while hovered.
+ * those that finished unseen a green dot (a glowing neon border on cards) and a
+ * bold name, the open one a blue bar (a blue border on cards), and those with
+ * skill proposals a pill counting them while hovered.
  */
 import type { ChatRequest, SearchSource, SessionActivity, SessionListItem, SessionSearchHit } from "../../src/protocol";
 import { foldText, parseQuery, termRanges } from "../../src/search-text";
@@ -64,6 +65,8 @@ export class HistoryPanel {
 	#selected = 0;
 	/** Path of the selected row, so it stays selected when a chat changes section. */
 	#selectedPath: string | undefined;
+	/** The arrow keys moved the selection: only then is it outlined, so it never reads as a second open chat. */
+	#keyboard = false;
 	/** Path of the row whose name is being edited. */
 	#editing: string | undefined;
 	/** Path of Today's card turned to its details by its info button (one at a time). */
@@ -225,18 +228,22 @@ export class HistoryPanel {
 		if (this.isOpen && this.#editing === undefined) this.#render();
 	}
 
-	#select(index: number, path: string | undefined): void {
+	#select(index: number, path: string | undefined, keyboard = false): void {
 		this.#selected = index;
 		this.#selectedPath = path;
+		this.#keyboard = keyboard;
 	}
 
-	/** Spinner while the session runs, green dot once it finished unseen; a fixed-width slot so every name lines up. */
-	#marker(item: SessionListItem): HTMLElement {
+	/**
+	 * Spinner while the session runs, green dot once it finished unseen; a fixed-width slot so every name lines up.
+	 * Cards pass `dot: false`: their neon border (`.history-card.unread`) marks the unseen finish instead.
+	 */
+	#marker(item: SessionListItem, dot = true): HTMLElement {
 		const slot = h("span", { className: "history-marker" });
 		if (item.activity === "running") {
 			slot.append(h("span", { className: "history-activity running" }));
 			setTooltip(slot, "MarIA Code is working on this session");
-		} else if (item.activity === "done") {
+		} else if (item.activity === "done" && dot) {
 			slot.append(h("span", { className: "history-activity done" }));
 			setTooltip(slot, "Finished while you were in another session");
 		}
@@ -316,8 +323,9 @@ export class HistoryPanel {
 		if (pending) children.push(h("div", { className: "history-empty" }, "Searching all messages…"));
 		const kept = this.#matches.findIndex(item => item.path === this.#selectedPath);
 		const index = kept >= 0 ? kept : Math.max(0, Math.min(this.#selected, this.#matches.length - 1));
-		this.#select(index, this.#matches[index]?.path);
+		this.#select(index, this.#matches[index]?.path, this.#keyboard);
 		rows[index]?.setAttribute("aria-selected", "true");
+		this.#list.classList.toggle("keyboard", this.#keyboard);
 		this.#list.replaceChildren(...children);
 		rows[index]?.scrollIntoView({ block: "nearest" });
 		this.#list.querySelector<HTMLInputElement>(".history-rename")?.focus();
@@ -462,9 +470,9 @@ export class HistoryPanel {
 	/**
 	 * Today's chat as a portrait card. The front tells chats apart at a glance:
 	 * state, age, name and where it was left. Clicking the card opens the chat;
-	 * its info button turns it to the back: when it started, how long it ran, its
-	 * size, its first and latest prompts, and the rename and delete buttons.
-	 * Renaming keeps the front in view.
+	 * its trash in the bottom corner deletes it; its info button turns it to the
+	 * back: when it started, how long it ran, its size, its first and latest
+	 * prompts, and the rename button. Renaming keeps the front in view.
 	 */
 	#card(item: SessionListItem, now: number): HTMLElement {
 		const editing = item.path === this.#editing;
@@ -482,7 +490,7 @@ export class HistoryPanel {
 			h(
 				"div",
 				{ className: "history-card-top" },
-				this.#marker(item),
+				this.#marker(item, false),
 				h("span", { className: "history-card-age" }, compactAge(item.modified, now)),
 				item.active ? h("span", { className: "history-card-badge" }, "Open") : null,
 			),
@@ -534,7 +542,7 @@ export class HistoryPanel {
 			),
 			prompt("First user message", item.firstPromptFull ?? item.firstPrompt),
 			prompt("Last user message", item.lastPromptFull ?? item.lastPrompt),
-			h("div", { className: "history-card-actions" }, rename, remove),
+			h("div", { className: "history-card-actions" }, rename),
 		);
 		const flipped = !editing && item.path === this.#flipped;
 		// One button per face, inside it, so it turns with the face instead of hanging in the card's corner mid-turn.
@@ -548,8 +556,10 @@ export class HistoryPanel {
 		};
 		const info = faceButton("info", "Show details");
 		info.ariaExpanded = String(flipped);
+		// The trash takes the front's bottom corner, styled like the info corner, instead of the row-button look.
+		remove.classList.replace("history-row-button", "history-card-delete");
 		if (!editing) {
-			front.append(info);
+			front.append(info, remove);
 			back.append(faceButton("close", "Hide details"));
 		}
 		const card = h(
@@ -708,7 +718,7 @@ export class HistoryPanel {
 				const count = this.#matches.length;
 				if (count === 0) return;
 				const index = (this.#selected + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
-				this.#select(index, this.#matches[index].path);
+				this.#select(index, this.#matches[index].path, true);
 				this.#render();
 				return;
 			}

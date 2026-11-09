@@ -22,6 +22,8 @@ body {
 	--c-add: #57ab5a;
 	--c-del: #e5534b;
 	--c-error: #e5534b;
+	/* The open chat in the history: always blue, whatever the theme's focus colour. */
+	--c-open: #3794ff;
 	--fs: var(--vscode-font-size, 13px);
 	--fs-sm: calc(var(--fs) - 1px);
 	--fs-code: var(--vscode-editor-font-size, 12px);
@@ -56,6 +58,7 @@ body.vscode-high-contrast-light {
 	--c-add: #1a7f37;
 	--c-del: #cf222e;
 	--c-error: #cf222e;
+	--c-open: #005fb8;
 	/* Syntax palette (VS Code Light Modern). */
 	--syn-keyword: #0000ff;
 	--syn-type: #267f99;
@@ -383,7 +386,7 @@ code {
 	opacity: 1;
 }
 
-/* On a chat without a workspace: omp runs in its own folder, not in the open project. */
+/* On a chat without a workspace: omp runs in its own folder, not in the open project. Blue, like the empty chat's card. */
 .no-workspace-badge {
 	flex: none;
 	display: inline-flex;
@@ -391,8 +394,9 @@ code {
 	gap: 4px;
 	padding: 1px 6px;
 	border-radius: 9999px;
-	border: 1px solid var(--c-border-heavy);
-	color: var(--c-fg-2);
+	border: 1px solid color-mix(in srgb, var(--c-open) 55%, transparent);
+	background: color-mix(in srgb, var(--c-open) 12%, transparent);
+	color: var(--c-fg);
 	font-size: var(--fs-sm);
 	white-space: nowrap;
 }
@@ -404,6 +408,7 @@ code {
 .no-workspace-badge .icon {
 	width: 12px;
 	height: 12px;
+	color: var(--c-open);
 }
 
 .title-input {
@@ -1644,6 +1649,32 @@ code {
 	margin-bottom: 8px;
 }
 
+/* The first prompt's goodbye of the logo (logo-farewell.ts): an overlay over the whole view. */
+.farewell {
+	position: fixed;
+	inset: 0;
+	z-index: 40;
+	pointer-events: none;
+}
+
+.farewell-canvas {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.farewell-caption,
+.farewell-fallback {
+	position: absolute;
+	margin: 0;
+	box-sizing: border-box;
+}
+
+.farewell-caption {
+	will-change: opacity, transform, filter;
+}
+
 .empty-title {
 	font-size: 18px;
 	font-weight: 500;
@@ -1652,6 +1683,115 @@ code {
 .empty-hint {
 	color: var(--c-fg-3);
 	font-size: var(--fs-sm);
+}
+
+/* Where the empty chat works: the project in the accent green, no workspace in blue. */
+.empty-place {
+	--place: var(--omp-accent);
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	width: 100%;
+	max-width: 360px;
+	box-sizing: border-box;
+	margin: 8px 0 4px;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--place) 50%, transparent);
+	border-radius: var(--r-lg);
+	background: color-mix(in srgb, var(--place) 8%, transparent);
+	text-align: left;
+}
+
+.empty-place[data-place="none"] {
+	--place: var(--c-open);
+}
+
+.empty-place[hidden] {
+	display: none;
+}
+
+.empty-place-icon {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: var(--r-md);
+	background: color-mix(in srgb, var(--place) 20%, transparent);
+	color: var(--place);
+}
+
+.empty-place-icon .icon {
+	width: 18px;
+	height: 18px;
+}
+
+.empty-place-body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.empty-place-kind {
+	color: var(--place);
+	font-size: calc(var(--fs) - 2px);
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.empty-place-name {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.empty-place-desc {
+	color: var(--c-fg-3);
+	font-size: var(--fs-sm);
+}
+
+/* The folder MarIA Code runs in, on one line (the tooltip has it whole). */
+.empty-place-path {
+	margin-top: 2px;
+	color: var(--c-fg-2);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: calc(var(--fs-code) - 1px);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.empty-place-switch {
+	align-self: flex-start;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 6px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--c-fg-3);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
+.empty-place-switch:hover {
+	color: var(--vscode-textLink-foreground);
+}
+
+.empty-place-switch:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+}
+
+.empty-place-switch .icon {
+	width: 12px;
+	height: 12px;
 }
 
 .examples {
@@ -1671,11 +1811,117 @@ code {
 	background: transparent;
 	color: var(--c-fg-2);
 	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .example:hover {
 	background: var(--c-hover);
 	color: var(--c-fg);
+}
+
+/* "Editar prompts" under the list, and the editor it opens. */
+.examples-edit,
+.examples-add {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	align-self: center;
+	margin-top: 6px;
+	font-size: var(--fs-sm);
+}
+
+.examples-edit {
+	color: var(--c-fg-3);
+}
+
+.examples-edit:hover {
+	color: var(--vscode-textLink-foreground);
+}
+
+.examples-edit .icon,
+.examples-add .icon {
+	width: 12px;
+	height: 12px;
+}
+
+.examples-add {
+	align-self: flex-start;
+}
+
+.examples-add:disabled {
+	opacity: 0.5;
+	cursor: default;
+	text-decoration: none;
+}
+
+.examples.editing {
+	gap: 6px;
+	padding: 10px;
+	border: 1px solid var(--c-border-heavy);
+	border-radius: var(--r-md);
+	text-align: left;
+}
+
+.examples-edit-title {
+	display: flex;
+	justify-content: space-between;
+	font-weight: 500;
+}
+
+.examples-count {
+	color: var(--c-fg-3);
+	font-size: var(--fs-sm);
+	font-weight: normal;
+	font-variant-numeric: tabular-nums;
+}
+
+.examples-fields {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.example-edit-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.example-input {
+	flex: 1;
+	min-width: 0;
+	padding: 4px 8px;
+	border: 1px solid var(--vscode-input-border, var(--c-border-heavy));
+	border-radius: var(--r-md);
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground, var(--c-fg));
+	font: inherit;
+}
+
+.example-input:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.examples-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 4px;
+}
+
+.examples-actions .secondary-button {
+	padding: 4px 14px;
+}
+
+.examples-reset {
+	font-size: var(--fs-sm);
+}
+
+.examples-spacer {
+	flex: 1;
 }
 
 /* Status overlay */
@@ -1902,13 +2148,13 @@ code {
 	background: var(--c-hover);
 }
 
-/* Keyboard selection: a focus outline, so it never looks like the hover or the open chat. */
-.history-row[aria-selected="true"] {
-	outline: 1px solid var(--vscode-focusBorder);
+/* Keyboard selection, only once the arrow keys moved it: a dashed outline, so it never looks like the open chat. */
+.history-list.keyboard .history-row[aria-selected="true"] {
+	outline: 1px dashed var(--c-fg-3);
 	outline-offset: -1px;
 }
 
-/* The open chat: an accent bar on its left edge. */
+/* The open chat: a blue bar on its left edge, the blue of the open card's border. */
 .history-row.active::before {
 	content: "";
 	position: absolute;
@@ -1917,7 +2163,7 @@ code {
 	bottom: 6px;
 	width: 3px;
 	border-radius: 9999px;
-	background: var(--omp-accent);
+	background: var(--c-open);
 }
 
 .history-line {
@@ -2126,7 +2372,8 @@ code {
 	grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
 	align-items: start;
 	gap: 8px;
-	padding: 8px 4px 4px;
+	/* Room for an unseen card's neon glow, which the scrolling list would otherwise clip. */
+	padding: 10px 8px 8px;
 	/* history.ts spells out the tracks while a card is turned: its column widens, the others narrow. */
 	transition: grid-template-columns var(--card-duration) var(--card-ease);
 }
@@ -2171,18 +2418,13 @@ code {
 	transition: box-shadow var(--card-duration) ease;
 }
 
+/* Neutral, so hovering never looks like the open chat's blue or an unseen chat's green. */
 .history-card:hover .history-card-face {
-	border-color: var(--vscode-focusBorder, var(--c-border-heavy));
+	border-color: color-mix(in oklab, var(--vscode-foreground) 30%, transparent);
 }
 
 .history-card.flipped:not(.editing) .history-card-face {
 	box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
-}
-
-.history-card.active.flipped:not(.editing) .history-card-face {
-	box-shadow:
-		inset 0 3px 0 var(--omp-accent),
-		0 10px 28px rgb(0 0 0 / 0.35);
 }
 
 /*
@@ -2217,6 +2459,30 @@ code {
 	color: var(--c-fg);
 }
 
+/* Deletes the chat (after the host's confirmation): the front's bottom-right corner, mirroring the info corner. */
+.history-card-delete {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	z-index: 2;
+	width: 40px;
+	height: 32px;
+	border-radius: var(--r-lg) 0 var(--r-lg) 0;
+	background: color-mix(in srgb, var(--c-fg) 7%, transparent);
+	color: var(--c-fg-2);
+	cursor: pointer;
+}
+
+.history-card-delete .icon {
+	width: 16px;
+	height: 16px;
+}
+
+.history-card-delete:hover {
+	background: color-mix(in srgb, var(--c-del) 28%, transparent);
+	color: var(--c-del);
+}
+
 .history-card-face {
 	position: absolute;
 	inset: 0;
@@ -2246,15 +2512,87 @@ code {
 	pointer-events: auto;
 }
 
-/* The open chat: accent border and a bar along the top. */
+/* The open chat, and only it: a blue border. The thicker border eats into the padding, so the content does not move. */
 .history-card.active .history-card-face {
-	border-color: color-mix(in srgb, var(--omp-accent) 60%, transparent);
-	box-shadow: inset 0 3px 0 var(--omp-accent);
+	padding: 9px;
+	border: 2px solid var(--c-open);
 }
 
-.history-card[aria-selected="true"] .history-card-face {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: -1px;
+.history-list.keyboard .history-card[aria-selected="true"] .history-card-face {
+	outline: 1px dashed var(--c-fg-3);
+	outline-offset: 2px;
+}
+
+/*
+ * Finished while you were elsewhere: a neon tube instead of the rows' green dot.
+ * Two light streaks race around the border while the glow slowly breathes.
+ */
+@property --history-neon-angle {
+	syntax: "<angle>";
+	inherits: false;
+	initial-value: 0deg;
+}
+
+.history-card.unread .history-card-face {
+	--neon: color-mix(in srgb, var(--c-add) 45%, #39ff14);
+	--neon-dim: color-mix(in srgb, var(--neon) 35%, transparent);
+	/* The thicker border eats into the padding, so the content does not move. */
+	padding: 9px;
+	border: 2px solid transparent;
+	background:
+		linear-gradient(var(--c-surface), var(--c-surface)) padding-box,
+		conic-gradient(
+				from var(--history-neon-angle),
+				var(--neon-dim),
+				var(--neon) 18%,
+				#fff 25%,
+				var(--neon) 32%,
+				var(--neon-dim) 50%,
+				var(--neon) 68%,
+				#fff 75%,
+				var(--neon) 82%,
+				var(--neon-dim)
+			)
+			border-box;
+	animation:
+		history-neon-spin 2.2s linear infinite,
+		history-neon-glow 3.2s ease-in-out infinite;
+}
+
+@keyframes history-neon-spin {
+	to {
+		--history-neon-angle: 360deg;
+	}
+}
+
+/* A slow, gentle breath: the same layers throughout, so it only swells and fades, never blinks. */
+@keyframes history-neon-glow {
+	0%,
+	100% {
+		box-shadow:
+			0 0 4px var(--neon),
+			0 0 12px color-mix(in srgb, var(--neon) 80%, transparent),
+			inset 0 0 8px color-mix(in srgb, var(--neon) 35%, transparent);
+	}
+	50% {
+		box-shadow:
+			0 0 3px var(--neon),
+			0 0 7px color-mix(in srgb, var(--neon) 50%, transparent),
+			inset 0 0 5px color-mix(in srgb, var(--neon) 20%, transparent);
+	}
+}
+
+/* Still a lit, steady border, only without the racing and breathing. */
+@media (prefers-reduced-motion: reduce) {
+	.history-card.unread .history-card-face {
+		animation: none;
+		background:
+			linear-gradient(var(--c-surface), var(--c-surface)) padding-box,
+			linear-gradient(var(--neon), var(--neon)) border-box;
+		box-shadow:
+			0 0 4px var(--neon),
+			0 0 12px color-mix(in srgb, var(--neon) 60%, transparent);
+	}
 }
 
 /* Clipped, not overflowing, while a neighbour's widening narrows this card; clear of the info button. */
@@ -2324,8 +2662,12 @@ code {
 	overflow: hidden;
 }
 
+/* Tall enough, with the face's padding, to keep the line above clear of the delete corner. */
 .history-card-foot {
 	margin-top: auto;
+	min-height: 22px;
+	/* Clear of the delete button in the corner. */
+	padding-right: 32px;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -2929,6 +3271,12 @@ code {
 
 .input::placeholder {
 	color: var(--vscode-input-placeholderForeground, var(--c-fg-3));
+}
+
+/* The typed-out ideas stay on one line, so the composer never changes height while they animate. */
+.input.typewriter::placeholder {
+	white-space: nowrap;
+	overflow: hidden;
 }
 
 /* Word prediction: a mirror behind the textarea repeats the draft invisibly and shows the suggestion in grey. */
