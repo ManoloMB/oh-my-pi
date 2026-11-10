@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- "New session" in an editor-tab chat now opens the new session as a tab in the same editor group; the sidebar chat still starts it in place.
+
 ## [0.35.0]
 
 ### Added

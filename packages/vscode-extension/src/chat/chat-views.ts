@@ -87,12 +87,12 @@ export class ChatRegistry implements vscode.WebviewViewProvider, vscode.Disposab
 		return this.#sidebar;
 	}
 
-	/** Open a chat in a new editor tab on `target`. */
-	openPanel(target: SessionTarget): ChatSession {
+	/** Open a chat in a new editor tab on `target` (a chat without a workspace when `noWorkspace`), in `column`'s tab group. */
+	openPanel(target: SessionTarget, noWorkspace = false, column = vscode.ViewColumn.Beside): ChatSession {
 		const panel = vscode.window.createWebviewPanel(
 			"ompCustom.chatPanel",
 			"MarIA Code",
-			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+			{ viewColumn: column, preserveFocus: false },
 			{ enableScripts: true, retainContextWhenHidden: true },
 		);
 		panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "media", "maria-mark.png");
@@ -102,6 +102,10 @@ export class ChatRegistry implements vscode.WebviewViewProvider, vscode.Disposab
 				return panel.visible;
 			},
 			reveal: () => panel.reveal(),
+			// "New session" in an editor tab opens a new tab in this tab's editor group; the sidebar chat starts it in place.
+			openBeside: beside => {
+				this.openPanel({ kind: "new" }, beside, panel.viewColumn ?? vscode.ViewColumn.Beside);
+			},
 		});
 		this.#panels.add(session);
 		session.onDidChange(() => {
@@ -115,7 +119,7 @@ export class ChatRegistry implements vscode.WebviewViewProvider, vscode.Disposab
 			this.#forget(session);
 		});
 		this.#setActive(session);
-		void session.open(target);
+		void session.open(target, noWorkspace);
 		return session;
 	}
 

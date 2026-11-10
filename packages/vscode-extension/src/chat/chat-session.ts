@@ -38,6 +38,8 @@ export interface ChatSurface {
 	readonly webview: vscode.Webview;
 	readonly visible: boolean;
 	reveal(): void;
+	/** Starts a new chat in a tab beside this one (editor tabs). Absent where "new session" replaces this chat's session. */
+	openBeside?(noWorkspace: boolean): void;
 }
 
 /** Shown before the view has a process (it gets one as soon as it opens). */
@@ -474,7 +476,8 @@ export class ChatSession implements vscode.Disposable, HostView {
 				await this.abort();
 				return;
 			case "newSession":
-				await this.newSession(request.noWorkspace);
+				if (this.surface.openBeside) this.surface.openBeside(request.noWorkspace ?? false);
+				else await this.newSession(request.noWorkspace);
 				return;
 			case "listSessions":
 				await this.#postSessions();
